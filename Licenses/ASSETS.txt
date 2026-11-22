@@ -1,0 +1,33 @@
+Shino desktop • asset provenance
+
+Assets/Shino.vrm is the Sendagaya Shino sample released by pixiv Inc. under
+CC0 1.0 Universal. The original VRM metadata identifies the same work and
+license. The app merges adjacent identical draw calls and adds named controls for
+existing mouth, eyelid and brow shapes in its packaged copy.
+Model, textures and expression geometry retain their original resolution.
+
+Official grant
+https://vroid.pixiv.help/hc/en-us/articles/360013482714-Sendagaya-Shino
+Official interactive model
+https://hub.vroid.com/en/characters/5860098757548846785/models/6567311261748429976
+Source of the unmodified original file
+https://github.com/madjin/vrm-samples/blob/e16eb187100149a315ad92c3c9968f1d5baa6c7d/vroid/beta/Sendagaya_Shino.vrm
+SHA-256 1e177c1a7b14f783a9c48395831db8616260d3bddd4154cb2784b779adca49b5
+
+KayKit Character Animations 1.1 (Kay Lousberg), Rig_Medium, CC0 1.0 Universal.
+Three excerpts are retargeted and blended with motion authored for Shino:
+Waving in hello, Walking_A in walk, Sneaking in sneak.
+https://kaylousberg.com/game-assets/character-animations
+https://github.com/GeorgeQLe/assets-kaykit-3d-characters/tree/af08a62d3669370ec4636ae6314b38cdcd5dd759/assets/kaykit/character-animations-1.1/Animations/gltf/Rig_Medium
+
+To the extent possible under law, the Shino desktop contributors waive all
+copyright and related or neighboring rights in their newly authored gestures,
+animation tracks, icons, rendered previews and Shino wardrobe assets under CC0 1.0 Universal.
+The cherry textures are recolored from the Shino sample. The wrap dress, cardigan,
+ankle boots, fabric repeats, garment weights and cloth guides were authored for Shino.
+CC0-1.0.txt contains the dedication and fallback license.
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Application code and authoring scripts: 0BSD, see LICENSE.
+Three.js, @pixiv/three-vrm and @pixiv/three-vrm-animation: MIT. Distribute
+the accompanying license notices with copies of the software.
