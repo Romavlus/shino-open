@@ -1,51 +1,69 @@
 # Shino Open 1.4.0
 
-[Скачать для macOS на Apple Silicon](Downloads/Shino-Open-1.4.0-macOS-arm64.zip) · [Предыдущая версия 1.3.0](Downloads/Shino-Open-1.3.0-macOS-arm64.zip)
+**English** · [Русский](README.ru.md)
 
-Требуется macOS 13 или новее. Распакуйте ZIP и перенесите Shino Open.app в папку приложений. Сборка подписана локальной подписью ad hoc. Интерфейс версии 1.4.0 на русском языке.
+Shino is an animated 3D desktop companion for macOS. Pick from six outfits, place up to ten characters on your desktop, or move them together onto a full-screen background on a second monitor. Each character can walk, idle and act out short scenes.
 
-Сино живёт на рабочем столе macOS. Значок с бантом в строке меню открывает примерочную, сценки и настройки поведения. В примерочной перетащи мышь для поворота, прокрути колесо для приближения или нажми «Портрет». «Пауза» фиксирует позу и позволяет рассмотреть освещение с разных сторон. На рабочем столе ⌘ с перетаскиванием поворачивает персонажа, а обычное перетаскивание перемещает его.
+[Download for Apple Silicon](https://raw.githubusercontent.com/Romavlus/shino-open/v1.4.0/Downloads/Shino-Open-1.4.0-macOS-arm64.zip) · [Previous version (1.3.0)](https://raw.githubusercontent.com/Romavlus/shino-open/v1.4.0/Downloads/Shino-Open-1.3.0-macOS-arm64.zip)
 
-В библиотеке три походки, три перехода ходьбы, четыре варианта ожидания и двадцать сценок. В примерочной выбранная сценка повторяется. Пункт «Показать все сценки» в строке меню запускает их на рабочем столе. Если выбрано несколько персонажей, все вместе проходят сценки по порядку один раз. Для сравнения каждый играет на своём месте, в темпе первого персонажа. Повторное нажатие останавливает общий показ. В разделе «Поведение» можно настроить размер, периодичность появлений, длительность визита, частоту сценок и мимику. Настройки сохраняются автоматически. У приложения собственный идентификатор `org.shinoopen.desktop`.
+## Getting started
 
-## Выбор персонажа
+The download requires macOS 13 or later. Unzip it and move **Shino Open.app** to your Applications folder. The build is ad hoc signed. **The app interface in version 1.4.0 is in Russian.** The controls below include the labels you will see on screen.
 
-В строке меню нажми значок банта и открой «Персонаж». Тот же список находится вверху примерочной. У Сино шесть образов. К исходному, вишнёвой форме и платью с кардиганом добавлены «25C · Чёрная косуха», «29 · Морской бриз» и «33C · Коралловый шёлк». Выбор сразу действует на оба окна и запоминается. Для сравнения в примерочной сохраняются сценка, её фаза, ракурс, масштаб и пауза.
+1. Open the app and click the bow icon in the macOS menu bar. Choose **Примерочная движений…** (Motion Studio) to preview Shino. Drag to rotate, scroll to zoom, or click **Портрет** for a close-up. Click **Пауза** to hold a pose while you orbit the character.
+2. On the desktop, drag Shino to move her. Hold **⌘ Command** and drag to rotate her. She turns to face the direction of travel before walking, then returns to your chosen angle when she stops.
+3. Open **Поведение** (Behavior) to set character size, facial expression intensity, scene frequency and scheduled visits. You can set how often Shino appears and how long she stays. Settings save automatically.
 
-Вверху примерочной введи число от 1 до 10 или нажми кнопки «−» и «+». Выбери образ в каждом нужном поле. «Нет» освобождает место. При уменьшении количества программа запоминает скрытые образы и возвращает их при увеличении. В разделе «Поведение» доступны общие настройки и отдельный профиль для каждого включённого персонажа.
+## Outfits and motion
 
-## Сцена во весь экран
+Choose an outfit under **Персонаж** (Character) in the bow menu or at the top of the studio. The six looks are Original Shino, Cherry Uniform, Dress with Cardigan, 25C Black Biker Jacket, 29 Sea Breeze and 33C Coral Silk. Switching outfits updates the desktop and studio together. The studio keeps the camera angle, zoom, animation position and pause state so you can compare outfits in the same pose.
 
-В меню с бантом открой «Сцена во весь экран» и выбери монитор. Кнопка «Открыть сцену во весь экран» во вкладке «Поведение» открывает последний выбранный монитор. При первом запуске открывается экран, на котором стоит больше всего персонажей. Выбери «Фон полноэкранной сцены» во вкладке «Поведение» или нажми правой кнопкой по свободному месту на сцене. Доступны пять градиентов и три пейзажа. У озера мерцают звёзды. Настройка macOS «Уменьшение движения» останавливает мерцание. Прогулки, сценки, поворот мышью и расписания продолжают работать в рамках выбранного экрана. Нажми Esc или выбери «Вернуться на рабочий стол», чтобы вернуть персонажей на прежние места.
+Use the **−** and **+** controls at the top of the studio or enter a number from 1 to 10. Pick an outfit for each slot, or choose **Нет** (None) to leave it empty. Reducing the slot count remembers the hidden selections for later. Under **Поведение**, choose shared settings or adjust each character individually.
 
-## Сборка
+The motion library includes three walks, three walking transitions, four idle animations and twenty short scenes. A selected scene loops in the studio. Choose **Показать все сценки** (Play all scenes) from the bow menu to play the full sequence once. All active characters perform each scene in sync, in place, at the first character’s pace. Select the command again to stop.
 
-На Mac с Python 3 и инструментами командной строки Xcode выполни команду из этой папки. Ресурсы Сино уже есть в проекте.
+## Full-screen mode
+
+Open **Сцена во весь экран** (Full-screen scene) in the bow menu and select a monitor. The **Открыть сцену во весь экран** button in Behavior reopens the last display you chose. The first time, it uses the display with the most characters.
+
+Choose **Фон полноэкранной сцены** (Scene background) in Behavior, or right-click an empty area of the scene. There are five gradients and three illustrated landscapes. Stars twinkle over the lake unless Reduce Motion is enabled in macOS. Walking, scenes, rotation and visit schedules continue on the selected monitor. Press **Esc** in the scene or choose **Вернуться на рабочий стол** to return the characters to their desktop positions.
+
+## Build and verify
+
+On a Mac with Python 3 and the Xcode Command Line Tools, run these commands from the repository root. The build includes the models, motions and rendering libraries, targets the architecture of the build machine, and signs the app locally. Its bundle identifier is `org.shinoopen.desktop`.
 
 ```sh
 python3 build.py --output "$HOME/Applications/Shino Open.app"
 open "$HOME/Applications/Shino Open.app" --args --studio
 ```
 
-Сборка создаёт приложение для архитектуры этого Mac с минимальной версией macOS 13. Пакет подписывается локальной подписью ad hoc. Для проверки окон, расписания, управления, поз и частоты кадров можно запустить исполняемый файл с параметром `--verify`. Проверка использует временные настройки в памяти. Флаг `--verify-models` проверяет все установленные образы, оба переключателя, воспроизведение и расписание.
+The first check covers windows, controls, scheduling, poses and frame timing using temporary settings. The second exercises outfit switching on the desktop and in the studio, playback and scheduled appearances.
 
-Варианты Сино используют общую модель, движения и мимику. Под платьем сохранено полное тело исходной модели. Пояс закреплён на талии, а складки реагируют на вес ткани, движение и касание ног. Геометрия одежды и материалы лежат в `Assets/Wardrobe`. Для повторного изготовления этих ресурсов запусти `python3 MotionSource/tailor_shino.py` в окружении с NumPy и Pillow. После этого команда `python3 MotionSource/atelier.py` собирает лекала, материалы и пружинные цепочки для образов 25C, 29 и 33C.
+```sh
+"$HOME/Applications/Shino Open.app/Contents/MacOS/Shino" --verify
+"$HOME/Applications/Shino Open.app/Contents/MacOS/Shino" --verify-models
+```
 
-После поворота мышью персонаж сначала разворачивается на месте в сторону прогулки. Когда прогулка заканчивается, снова виден выбранный для стойки ракурс.
+## Artwork, motion and lighting
 
-## Движения и свет
+The outfits share Shino’s base model, motion library and facial expressions. The dress retains the original body underneath. Its waistband stays anchored while the folds respond to gravity, movement and contact with the legs. Garment geometry and materials are in `Assets/Wardrobe`. To regenerate them, install NumPy and Pillow in your Python environment and run:
 
-Команда с параметром `--blend` создаёт `MotionSource/Сино — анимации.blend` с моделью, текстурами, скелетом и 31 действием, включая дыхание. Выбери скелет и открой Action Editor для просмотра отдельных движений. В приложении физика волос и юбки работает поверх скелетной анимации.
+```sh
+python3 MotionSource/tailor_shino.py
+python3 MotionSource/atelier.py
+```
 
-Воспроизводимая версия библиотеки собирается из `MotionSource/gestures.py`, `animate.py` и сохранённых дорожек KayKit в `kaykit.json`. Первая команда записывает VRMA в `Motions`. Параметр `--blend` также заново создаёт файл Blender, поэтому перед этим сохрани ручные изменения сцены отдельно.
+The second script builds the patterns, materials and spring-bone chains for outfits 25C, 29 and 33C.
+
+The animation sources are `MotionSource/gestures.py`, `MotionSource/animate.py` and the KayKit motion tracks in `kaykit.json`. The first Blender command below writes VRMA clips into `Motions`. The second also regenerates `MotionSource/Сино — анимации.blend`, so save any manual edits to that scene separately first.
 
 ```sh
 blender -b --python-exit-code 1 -P MotionSource/animate.py
 blender -b --python-exit-code 1 -P MotionSource/animate.py -- --blend
 ```
 
-`Source/lighting.js` задаёт общий для рабочего стола и примерочной свет, карту теней и блики материалов MToon. Направление света сочетает неподвижную составляющую и привязку к ракурсу. Пряди, пальцы, рукава и складки меняют освещение вместе со скелетом. При паузе кадр пересчитывается по изменению ракурса.
+Select the armature in Blender’s Action Editor to inspect the 31 actions, including breathing. At runtime, hair and clothing physics run on top of the skeletal animation. The desktop and studio share the lighting, shadows and MToon highlights in `Source/lighting.js`. Lighting responds to the pose and camera angle, including when you rotate a paused character.
 
-## Распространение
+## Licenses
 
-Модель Сино, исходные движения KayKit, дополнительные жесты и отрисованные изображения распространяются по CC0. Для собственного кода применяется 0BSD. В приложении уже лежат тексты MIT для включённых библиотек Three.js и three-vrm. Происхождение модели, отдельных движений и тексты лицензий приведены в `Licenses` и `LICENSE`.
+Shino’s model, KayKit motion assets, additional gestures and illustrated artwork are distributed under [CC0](Licenses/CC0-1.0.txt). The project’s own code uses [0BSD](LICENSE). The app includes the MIT notices for Three.js, three-vrm and three-vrm-animation. Keep those notices when redistributing the rendering libraries. See [asset provenance](Licenses/ASSETS.txt) and the [license files](Licenses).
