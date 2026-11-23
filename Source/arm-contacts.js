@@ -1,4 +1,4 @@
-function fitArmContacts(vrm, Vector, limbs, steer, padding=0) {
+function fitArmContacts(vrm, Vector, limbs, steer, padding=0, sleeveFoldLimit=null) {
     const bone = name => vrm.humanoid.getNormalizedBoneNode(name);
     const upperChest=bone('upperChest');
     const chest = bone('chest'), hips = bone('hips'), head = bone('head');
@@ -38,7 +38,7 @@ function fitArmContacts(vrm, Vector, limbs, steer, padding=0) {
                 extension:digit==='Thumb'?.015:.020,offset:new Vector(),pad:part==='Distal'?.013:.022})));
         return {limb, sign:i===0?-1:1, samples, s:new Vector(), e:new Vector(), w:new Vector(),
             e0:new Vector(), w0:new Vector(), tip:new Vector(), tipOffset:new Vector(),
-            lastElbow:new Vector(),lastWrist:new Vector(),
+            lastElbow:new Vector(),lastWrist:new Vector(),elbowTarget:new Vector(),wristTarget:new Vector(),
             orientation:chest.quaternion.clone(), forward:0, upper:0, lower:0};
     });
     let fitted=false;
@@ -118,6 +118,17 @@ function fitArmContacts(vrm, Vector, limbs, steer, padding=0) {
         }
         return hit;
     }
+    // At maximum flexion the wrist can reach the upper sleeve itself. Make
+    // room for the sewn layers in the performer's own elbow plane.
+    function sleeveContact(arm) {
+        axis.subVectors(arm.e,arm.s).normalize();otherAxis.subVectors(arm.w,arm.e).normalize();
+        const cosine=axis.dot(otherAxis);
+        if(cosine>=sleeveFoldLimit)return false;
+        otherAxis.addScaledVector(axis,-cosine).normalize();
+        arm.w.copy(arm.e).addScaledVector(axis,arm.lower*sleeveFoldLimit)
+            .addScaledVector(otherAxis,arm.lower*Math.sqrt(1-sleeveFoldLimit*sleeveFoldLimit));
+        return true;
+    }
     function lengths(arm) {
         // Position constraints keep both bone lengths and the authored elbow bend.
         axis.subVectors(arm.w,arm.e);
@@ -165,7 +176,13 @@ function fitArmContacts(vrm, Vector, limbs, steer, padding=0) {
         toChest.copy(toHip).invert();
         toHead.copy(head.matrixWorld).invert().multiply(chest.matrixWorld);
         fromHead.copy(toHead).invert();
-        const carry=fitted && dt>0 ? Math.exp(-dt*16) : 0;
+        // Idle clips already contain the breathing and finger motion. Solve the
+        // clothing clearance from the authored pose, then damp only its offset.
+        // Feeding the previous push back into the idle solve causes chatter at the hem.
+        const idle=clamp(quiet);
+        const history=fitted && dt>0;
+        const carry=history ? (1-idle)*Math.exp(-dt*16) : 0;
+        const follow=dt>0 ? 1-idle*Math.exp(-dt/.09) : 1;
         fitted=false;
         let restingHand=0;
         for(const arm of arms){
@@ -200,13 +217,18 @@ function fitArmContacts(vrm, Vector, limbs, steer, padding=0) {
             for(const [a,b] of pairs){
                 if(separate(arms[0],arms[1],a,b,cold))hit=true;
             }
-            if(!hit && i===0 && !carry)return;
+            if(sleeveFoldLimit!==null)for(const arm of arms)if(sleeveContact(arm))hit=true;
+            if(!hit && i===0 && !carry && !history)return;
             for(const arm of arms)lengths(arm);
             if(!hit && arms.every(arm=>Math.abs(arm.e.distanceTo(arm.w)-arm.lower)<.0002))break;
         }
         for(const arm of arms){
-            arm.lastElbow.subVectors(arm.e,arm.e0);
-            arm.lastWrist.subVectors(arm.w,arm.w0);
+            arm.elbowTarget.lerp(axis.subVectors(arm.e,arm.e0),follow);
+            arm.wristTarget.lerp(axis.subVectors(arm.w,arm.w0),follow);
+            arm.lastElbow.lerp(arm.elbowTarget,follow);
+            arm.lastWrist.lerp(arm.wristTarget,follow);
+            arm.e.copy(arm.e0).add(arm.lastElbow);
+            arm.w.copy(arm.w0).add(arm.lastWrist);
             if(arm.e.distanceToSquared(arm.e0)+arm.w.distanceToSquared(arm.w0)<1e-9)continue;
             fitted=true;
             const {limb}=arm,hand=limb.hand.bone;

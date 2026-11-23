@@ -22,7 +22,7 @@ https://github.com/GeorgeQLe/assets-kaykit-3d-characters/tree/af08a62d3669370ec4
 
 To the extent possible under law, the Shino desktop contributors waive all
 copyright and related or neighboring rights in their newly authored gestures,
-animation tracks, icons, rendered previews and Shino wardrobe assets under CC0 1.0 Universal.
+animation tracks, icons, rendered previews, the three illustrated scene backgrounds and Shino wardrobe assets under CC0 1.0 Universal.
 The cherry textures are recolored from the Shino sample. The wrap dress, cardigan,
 ankle boots, fabric repeats, garment weights and cloth guides were authored for Shino.
 CC0-1.0.txt contains the dedication and fallback license.

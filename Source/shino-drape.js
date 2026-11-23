@@ -52,10 +52,62 @@ function dressBodySurface(vrm,source,sectors,Vector,prototype){
     return {update,radius};
 }
 
+// A folded forearm can occupy the space inside a loose short sleeve. Lift just
+// the side of the cuff that touches it, preserving the actor's wrist and gesture.
+function fitSleeveRolls(vrm,source,Vector){
+    const sleeves=source.map(({side,controls})=>({
+        upper:vrm.humanoid.getRawBoneNode(side+'UpperArm'),
+        elbow:vrm.humanoid.getRawBoneNode(side+'LowerArm'),
+        hand:vrm.humanoid.getRawBoneNode(side+'Hand'),
+        ring:controls.map(c=>({joint:vrm.scene.getObjectByName(c.name),mid:new Vector(...c.middle),
+            lip:new Vector(...c.lip),shift:new Vector(),amount:0,held:0}))
+    }));
+    const inv=sleeves[0].upper.matrixWorld.clone(),axis=new Vector(),e=new Vector(),w=new Vector(),
+        fore=new Vector(),q=new Vector(),radial=new Vector(),center=new Vector(),inside=new Vector();
+    function clear(probe,shift,amount,length){
+        q.copy(probe).addScaledVector(shift,amount);
+        const t=Math.max(0,Math.min(length,center.subVectors(q,e).dot(fore)));
+        center.copy(e).addScaledVector(fore,t);
+        inside.copy(axis).multiplyScalar(q.dot(axis)).sub(center).normalize();
+        // The envelope follows the thicker proximal forearm, tapering towards the hand.
+        const radius=.0365-.007*Math.min(1,t/length);
+        return inside.dot(q.sub(center))>=radius+.006;
+    }
+    return (dt,reset)=>{
+        for(const {upper,elbow,hand,ring} of sleeves){
+            inv.copy(upper.matrixWorld).invert();
+            e.setFromMatrixPosition(elbow.matrixWorld).applyMatrix4(inv);axis.copy(e).normalize();
+            w.setFromMatrixPosition(hand.matrixWorld).applyMatrix4(inv);fore.subVectors(w,e);
+            const length=fore.length();fore.multiplyScalar(1/Math.max(.001,length));
+            const folding=axis.dot(fore)<-.30;
+            for(const r of ring){
+                radial.copy(r.lip).addScaledVector(axis,-r.lip.dot(axis)).normalize();
+                // As the cloth slides towards the shoulder it rides over a wider
+                // part of the upper arm. Keep its ease on the inside of the fold.
+                r.shift.copy(axis).multiplyScalar(-.085).addScaledVector(radial,.008);
+                r.amount=0;
+                if(!folding)continue;
+                const fits=value=>clear(r.lip,r.shift,value,length) && clear(r.mid,r.shift,.72*value,length);
+                if(fits(0))continue;
+                let lo=0,hi=1;
+                for(let n=0;n<6;n++){const m=(lo+hi)*.5;if(fits(m))hi=m;else lo=m}
+                r.amount=hi;
+            }
+            for(let j=0;j<ring.length;j++){
+                const r=ring[j],n=ring.length;
+                const amount=Math.max(r.amount,.84*ring[(j+n-1)%n].amount,.84*ring[(j+1)%n].amount);
+                r.held=reset || amount>=r.held ? amount : amount+(r.held-amount)*Math.exp(-dt*19);
+                r.joint.position.copy(r.shift).multiplyScalar(r.held);
+            }
+        }
+    };
+}
+
 /* Lightweight particle cloth in a gravity-aligned frame. Only the waistband is
    pinned. Warp, weft and bias lengths couple adjacent panels across the wrap. */
 function fitHangingDress(vrm,hips,pattern,Vector){
     const {levels,sectors,shell}=pattern,origin=new Vector(...pattern.origin);
+    const sleeveRolls=pattern.sleeveRolls?.length ? fitSleeveRolls(vrm,pattern.sleeveRolls,Vector):null;
     const mat=hips.matrixWorld;
     const frame=mat.clone(),inverse=mat.clone(),oldFrame=mat.clone(),carry=mat.clone(),hipToFrame=mat.clone(),frameToHip=mat.clone();
     const body=dressBodySurface(vrm,pattern.body,sectors,Vector,mat);
@@ -128,6 +180,7 @@ function fitHangingDress(vrm,hips,pattern,Vector){
         hipToFrame.multiplyMatrices(inverse,mat);frameToHip.copy(hipToFrame).invert();
         carry.multiplyMatrices(inverse,oldFrame);
         const turn=Math.atan2(Math.sin(yaw-previousYaw),Math.cos(yaw-previousYaw));
+        if(sleeveRolls)sleeveRolls(dt,reset);
         if(!reset && !dt)return;
         if(reset)yawRate=0;
         else yawRate+=(Math.max(-6,Math.min(6,turn/dt))-yawRate)*-Math.expm1(-dt*10);
@@ -187,5 +240,6 @@ function fitHangingDress(vrm,hips,pattern,Vector){
         return {waist:displacement(rings[0]),hem:displacement(rings.at(-1)),ties:ties.map(t=>t.p.length()),
                 kneeFront:Math.max(...knees.flatMap(row=>row.map(g=>-g.p.z)))};
     }
-    return {update,measure,gaitScale:1,liftScale:1,sleevePadding:pattern.sleevePadding,reset(){reset=true}};
+    return {update,measure,sleevePadding:pattern.sleevePadding,
+        sleeveFoldLimit:sleeveRolls ? -.89:null,reset(){reset=true}};
 }

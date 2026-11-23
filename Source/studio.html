@@ -11,10 +11,11 @@ summary{cursor:pointer;padding:5px 0;color:#dfcdbb}
 .scaleControls{display:flex;align-items:center;gap:7px}.scaleControls input[type=number]{width:68px}
 .gestureHint{font-size:13px;line-height:1.4;color:#d4c8cc;margin:8px 0 18px}
 #studioHead{position:sticky;top:-16px;z-index:1;background:#24242d;padding:8px 0;margin:-8px 0 4px}
-#modelPicker label{margin:0 0 4px}#character{margin:0 0 10px}
+.rosterSize{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px}.rosterSize label{margin:0}.rosterSize input[type=number]{width:43px;padding:5px 3px;text-align:center;appearance:textfield}.rosterSize input::-webkit-inner-spin-button{appearance:none}.rosterControls{display:flex;align-items:center;gap:3px}.rosterControls button{padding:4px;width:27px}.rosterControls button:disabled{cursor:default}#modelPicker{max-height:min(40vh,360px);overflow-y:auto;display:grid;grid-template-columns:auto minmax(0,1fr);gap:5px 8px;align-items:center;margin-bottom:10px}#modelPicker label{margin:0}#modelPicker select{min-width:0}
 </style>
 <body><main id="stage"><span id="cameraHint">Потяни, чтобы повернуть · Колесо — приблизить</span><span id="caption">Загрузка персонажа…</span></main><aside>
-<header id="studioHead"><div id="modelPicker" hidden><label for="character">Персонаж</label><select id="character"></select></div>
+<header id="studioHead"><div class="rosterSize"><label for="slotCount">Персонажей (1–10)</label><div class="rosterControls"><button type="button" id="fewer" aria-label="Уменьшить количество персонажей">−</button><input id="slotCount" type="number" min="1" max="10" step="1"><button type="button" id="more" aria-label="Увеличить количество персонажей">+</button></div></div>
+<div id="modelPicker"></div>
 <nav><button id="showLibrary">Движения</button><button id="showOptions">Поведение</button></nav></header>
 <section id="library"><div class="tools"><button id="pause">Пауза</button><button id="again">Повтор</button><button id="portrait">Портрет</button></div>
 <label id="autoOption" hidden><input id="auto" type="checkbox"> Может выполнять сама</label>
@@ -25,10 +26,15 @@ summary{cursor:pointer;padding:5px 0;color:#dfcdbb}
 <h3>Сценки</h3><div id="scene"></div>
 </div></section>
 <section id="options" hidden>
-<label for="language">Язык</label><select id="language"><option value="system">Как в системе</option><option value="ru">Русский</option><option value="en">English</option></select>
+<label for="backdrop">Фон полноэкранной сцены</label><select id="backdrop"></select>
+<button type="button" id="openScene">Открыть сцену во весь экран</button>
+<label for="mode">Настройки поведения</label><select id="mode"><option value="shared">Общие для всех</option><option value="personal">Отдельно для каждого</option></select>
+<div id="targetRow" hidden><label for="target">Чьи настройки</label><select id="target"></select></div>
+<label><input type="checkbox" id="walk"> Гулять по экрану</label>
+<label for="gaitChoice">Походка</label><select id="gaitChoice"><option value="3">Мягкая прогулка</option><option value="1">Обычный шаг</option><option value="2">Сдержанный шаг</option></select>
 <label for="scaleRange">Размер на рабочем столе</label>
 <div class="scaleControls"><input id="scaleRange" type="range" min="15" max="400" step="1" value="100"><input id="scaleExact" type="number" min="15" max="400" step="1" value="100" aria-label="Точный размер в процентах"><span>%</span></div>
-<p class="gestureHint">Чтобы повернуть персонажа на рабочем столе, потяни его с зажатой ⌘.</p>
+<p class="gestureHint">Чтобы повернуть персонажа на рабочем столе, потяни его с зажатой ⌘.</p><button id="resetAngle">Сбросить ракурс</button>
 <label for="presence">Персонаж на рабочем столе</label><select id="presence"><option value="always">Всегда на экране</option><option value="visits">Появляться по расписанию</option></select>
 <div id="visits" hidden>
 <label for="period">Появляться каждые</label><div class="field"><input id="period" type="number" step="any"><select id="periodUnit" aria-label="Единица интервала"><option value="60">мин.</option><option value="1">сек.</option></select></div>
@@ -38,6 +44,6 @@ summary{cursor:pointer;padding:5px 0;color:#dfcdbb}
 <h3>Сценки</h3><label for="frequency">Как часто играть случайную сценку</label><select id="frequency"><option value="manual">Только вручную</option><option value="rare">Редко · 2–4 минуты</option><option value="normal">Обычно · 1–2 минуты</option><option value="often">Часто · 20–40 секунд</option><option value="fixed">Через равные интервалы</option><option value="custom">Случайно в своём диапазоне</option></select>
 <div id="interval" hidden><label><span id="lowLabel">От</span> <input id="low" type="number" min="5" max="86400"> сек.</label><label id="highRow">До <input id="high" type="number" min="5" max="86400"> сек.</label></div>
 <label for="amount">Выразительность лица · <output id="level"></output>%</label><input id="amount" type="range" min="0" max="150" step="5">
-<label><input type="checkbox" id="gaze"> Смотреть на курсор</label></section>
+<label><input type="checkbox" id="gaze"> Смотреть на курсор</label><h3>Программа</h3><label><input type="checkbox" id="login"> Запускать при входе в macOS</label></section>
 </aside>
 <script src="catalog.js"></script><script src="runtime.js"></script><script src="studio.js"></script><script src="lighting.js"></script><script src="fit.js"></script><script src="arm-contacts.js"></script><script src="face.js"></script><script src="shino-drape.js"></script><script src="pet.js"></script></body></html>

@@ -16,6 +16,10 @@ function shinoLighting(renderer,scene,camera,Sun,Sky,Vector){
     key.shadow.normalBias=.0024;
     key.shadow.bias=-.00016;
     key.shadow.radius=1.6;
+    // Thin overlapping hair cards and tailored layers need a softer contact shadow.
+    if(['shinoRider','shinoMarine','shinoBordeaux'].includes(petModel.id)){
+        key.shadow.intensity=.32;key.shadow.normalBias=.0036;key.shadow.bias=-.00045;
+    }
     function aim(){
         // Follow the azimuth gradually with the camera. Keep a world-space component
         // so an orbit also changes which folds and strands receive the key light.
@@ -25,6 +29,32 @@ function shinoLighting(renderer,scene,camera,Sun,Sky,Vector){
         right.crossVectors(up,towards);
         offset.set(-.38,.94,.32).addScaledVector(towards,.58).addScaledVector(right,-.72).normalize();
         key.position.copy(pivot).addScaledVector(offset,3.2);
+    }
+    // A combed lock reflects light in a band perpendicular to its fibres.
+    // Derive the fibre direction from the skinned surface and the hair-card UVs.
+    function strandLight(material){
+        const original=material.onBeforeCompile.bind(material),key=material.customProgramCacheKey.bind(material);
+        material.customProgramCacheKey=()=>key()+'-combed-silk-v1';
+        material.onBeforeCompile=(shader,context)=>{
+            original(shader,context);
+            const pass='#include <opaque_fragment>';
+            shader.fragmentShader=shader.fragmentShader.replace(pass,`
+                #if NUM_DIR_LIGHTS > 0
+                    vec3 acrossX=dFdx(-vViewPosition),acrossY=dFdy(-vViewPosition);
+                    vec3 fibre=acrossY*dFdx(vMapUv.x)-acrossX*dFdy(vMapUv.x);
+                    fibre*=inversesqrt(max(1e-20,dot(fibre,fibre)));
+                    vec3 lamp=directionalLights[0].direction;
+                    vec3 halfway=normalize(lamp+normalize(vViewPosition));
+                    float band=abs(dot(fibre,halfway));
+                    float primary=exp(-pow((band-.10)/.16,2.0));
+                    float secondary=exp(-pow((band-.38)/.21,2.0));
+                    float lit=smoothstep(-.05,.82,dot(normal,lamp));
+                    vec3 tint=sqrt(max(diffuseColor.rgb,vec3(.001)));
+                    outgoingLight+=lit*tint*(primary*vec3(.13,.089,.114)+secondary*vec3(.045,.025,.036));
+                #endif
+                ${pass}`);
+        };
+        material.needsUpdate=true;
     }
     function fit(vrm){
         const materials=new Set();
@@ -36,6 +66,12 @@ function shinoLighting(renderer,scene,camera,Sun,Sky,Vector){
             // Delicate transparent eye and brow decals share the face underneath.
             mesh.castShadow=!/Eye|FaceBrow|Mouth|HairBack/.test(n);
             mesh.receiveShadow=true;
+            if(base.isMeshPhysicalMaterial && base.anisotropy>0 && n.includes('HAIR')){
+                // The opaque underhair casts the silhouette; individual alpha strands receive its shadow.
+                mesh.castShadow=base.alphaTest===0;
+                if(!materials.has(base)){materials.add(base);strandLight(base)}
+                return;
+            }
             if(materials.has(base) || !base.isMToonMaterial)return;
             materials.add(base);
             const hair=/HAIR/.test(n),clothes=/CLOTH/.test(n),skin=/SKIN/.test(n);

@@ -17,7 +17,7 @@ def build(output):
         contents=app/'Contents';bin=contents/'MacOS';res=contents/'Resources'
         res.mkdir(parents=True);bin.mkdir()
         meta={'CFBundleName':'Shino Open','CFBundleDisplayName':'Shino Open','CFBundleExecutable':'Shino',
-              'CFBundleIdentifier':BUNDLE_ID,'CFBundleVersion':'9','CFBundleShortVersionString':'1.3.0','CFBundleLocalizations':['ru','en'],'CFBundleDevelopmentRegion':'en',
+              'CFBundleIdentifier':BUNDLE_ID,'CFBundleVersion':'19','CFBundleShortVersionString':'1.4.0',
               'CFBundleInfoDictionaryVersion':'6.0','CFBundlePackageType':'APPL','LSUIElement':True,
               'LSMinimumSystemVersion':'13.0','NSHighResolutionCapable':True}
         icon=ROOT/'Assets/Shino.icns'
@@ -27,7 +27,8 @@ def build(output):
         if hashlib.sha256(model.read_bytes()).hexdigest()!='1e177c1a7b14f783a9c48395831db8616260d3bddd4154cb2784b779adca49b5':raise ValueError('Unexpected model')
         optimize_model(model,res/'Shino.vrm')
         package_wardrobe(ROOT/'Assets'/'Wardrobe',res)
-        for name in ('en.json','studio.html','studio.js','pet.js','face.js','lighting.js','fit.js','arm-contacts.js','shino-drape.js','ShinoMenu.svg'):shutil.copy2(ROOT/'Source'/name,res/name)
+        shutil.copytree(ROOT/'Assets'/'Scenery',res/'Scenery')
+        for name in ('studio.html','studio.js','pet.js','face.js','lighting.js','fit.js','arm-contacts.js','shino-drape.js','ShinoMenu.svg'):shutil.copy2(ROOT/'Source'/name,res/name)
         shutil.copy2(ROOT/'Vendor/runtime.js',res/'runtime.js')
         shutil.copytree(ROOT/'Licenses',res/'Licenses')
         shutil.copy2(ROOT/'LICENSE',res/'Licenses/LICENSE')
@@ -40,7 +41,7 @@ def build(output):
         catalog=json.dumps(rows,ensure_ascii=False,separators=(',',':'))
         (res/'catalog.json').write_text(catalog)
         (res/'catalog.js').write_text(f'const catalog={catalog};const clipSeconds={json.dumps(seconds)};const cycleTravel={json.dumps(gait)};')
-        run('xcrun','swiftc','-O','-target',platform.machine()+'-apple-macosx13.0','-framework','WebKit','-framework','AppKit','-framework','ServiceManagement',str(ROOT/'Source/Pet.swift'),str(ROOT/'Source/Models.swift'),str(ROOT/'Source/Welcome.swift'),str(ROOT/'Source/VerifyModels.swift'),'-o',str(bin/'Shino'))
+        run('xcrun','swiftc','-O','-target',platform.machine()+'-apple-macosx13.0','-framework','WebKit','-framework','AppKit','-framework','ServiceManagement',str(ROOT/'Source/Pet.swift'),str(ROOT/'Source/Models.swift'),str(ROOT/'Source/Profiles.swift'),str(ROOT/'Source/SceneRound.swift'),str(ROOT/'Source/FullScreenScene.swift'),str(ROOT/'Source/VerifyModels.swift'),'-o',str(bin/'Shino'))
         run('codesign','--force','--sign','-','--identifier',BUNDLE_ID,str(app))
         run('codesign','--verify','--strict',str(app))
         previous=Path(tmp)/'previous.app'

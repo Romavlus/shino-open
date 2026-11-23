@@ -73,9 +73,17 @@ class Cut:
         return len(self.accessors)-1
     def joint(self,short):
         return self.bones.index('J_Bip_'+short)
-    def add_guide(self,name,parent):
-        self.guides.append([name,parent])
-        self.matrices.append(self.matrices[self.hip])
+    def add_guide(self,name,parent,position=None):
+        bind=np.array(self.matrices[self.bones.index(parent)],copy=True)
+        guide=[name,parent]
+        if position is not None:
+            # Bind matrices in glTF are column-major. Express the pivot in its parent's frame.
+            matrix=bind.reshape(4,4).T
+            local=(matrix@np.r_[position,1])[:3]
+            guide.append(local.tolist())
+            matrix[:3,3]-=local
+        self.guides.append(guide)
+        self.matrices.append(bind)
         self.bones.append(name)
         return len(self.bones)-1
     def torso(self,x,y):
@@ -96,11 +104,11 @@ class Cut:
             return weights(*[(i,v*(1-t)) for i,v in self.torso(x,y)],(self.joint(side+'_UpperArm'),t))
         t=smooth((a-.284)/.084);hand=.16*smooth((a-.511)/.032)
         return weights((self.joint(side+'_UpperArm'),1-t),(self.joint(side+'_LowerArm'),t*(1-hand)),(self.joint(side+'_Hand'),t*hand))
-    def skin(self):
+    def skin(self,paint=True):
         primitive=next(p for p in self.doc['meshes'][self.body['mesh']]['primitives'] if p['material']==9)
         attrs=primitive['attributes'];pos=self.read(attrs['POSITION']);uv=self.read(attrs['TEXCOORD_0'])
         triangles=np.concatenate([self.read(p['indices']).reshape(-1,3) for p in self.doc['meshes'][self.body['mesh']]['primitives'] if p['material']==9])
-        bare_skin(self.doc,self.binary,uv,triangles,OUT)
+        if paint:bare_skin(self.doc,self.binary,uv,triangles,OUT)
         self.source_joints=self.read(attrs['JOINTS_0'])
         self.source_weights=self.read(attrs['WEIGHTS_0'])
         # The old shirt collar covered a very sharp ridge. Relax only the front
@@ -130,12 +138,12 @@ class Cut:
         self.skin_attributes=dict(POSITION=self.store(fitted,'VEC3',target=34962),NORMAL=self.store(normals,'VEC3',target=34962))
         self.surface=GarmentFit(self,fitted,normals,triangles)
         return pos,triangles
-    def finish(self):
+    def finish(self,stem="cardigan",**extras):
         bind=self.store(self.matrices,'MAT4')
         spec=dict(bytes=len(self.data),views=self.views,accessors=self.accessors,pieces=self.pieces,
-                  guides=self.guides,fit=self.fit,skinAttributes=self.skin_attributes,bind=bind)
-        (OUT/'cardigan-cut.bin').write_bytes(self.data)
-        (OUT/'cardigan-cut.json').write_text(json.dumps(spec,separators=(',',':')))
+                  guides=self.guides,fit=self.fit,skinAttributes=self.skin_attributes,bind=bind,**extras)
+        (OUT/(stem+'-cut.bin')).write_bytes(self.data)
+        (OUT/(stem+'-cut.json')).write_text(json.dumps(spec,separators=(',',':')))
 
 
 class Piece:
@@ -154,9 +162,9 @@ class Piece:
                     d=start+row*w+col;b=d-w;c=d-1;a=b-1
                     self.faces.extend([(a,c,b),(b,c,d)] if reverse else [(a,b,c),(b,d,c)])
             if loop:self.seams.append((start+row*w,start+(row+1)*w-1))
-    def save(self):
-        p=np.array(self.pos);f=np.asarray(self.faces)
-        self.cut.surface.tailor(p,self.weights,self.info['name'])
+    def save(self,fit=True,ease=None):
+        p=np.array(self.pos,dtype=float);f=np.asarray(self.faces)
+        if fit:self.cut.surface.tailor(p,self.weights,self.info['name'],ease)
         cross=np.cross(p[f[:,1]]-p[f[:,0]],p[f[:,2]]-p[f[:,0]])
         normals=np.zeros_like(p)
         for i in range(3):np.add.at(normals,f[:,i],cross)

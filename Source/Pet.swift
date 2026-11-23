@@ -31,7 +31,7 @@ struct Visits:Codable,Equatable {
         duration=min(period-1,max(1,duration))
     }
 }
-struct Behavior:Codable {
+struct Behavior:Codable,Equatable {
     var frequency="normal",low=60,high=120,amount=100,gaze=true,disabled=[String]()
     // Older preferences predate scheduled visits and mean continuous display.
     var visits:Visits?
@@ -55,7 +55,9 @@ struct Showcase {
 final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate, NSWindowDelegate, NSMenuDelegate {
     let verifyModels=CommandLine.arguments.contains("--verify-models")
     var testing:Bool { verifyModels || CommandLine.arguments.contains("--verify") }
-    let models=ModelLibrary(resources:Bundle.main.resourceURL!)
+    static let modelLibrary=ModelLibrary(resources:Bundle.main.resourceURL!)
+    var models:ModelLibrary { Self.modelLibrary }
+    static let dataStore=WKWebsiteDataStore.nonPersistent()
     var selectedModel:PetModel = .shino
     var catalog:[Motion] {models.catalog}
     var modelRequest=0,hasLoaded=false,galleryReady=false
@@ -69,6 +71,7 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     var settings=Behavior(),durations=[Double]()
     var visitOrigin:Date?, shownCycle:Int?, away=false
     var gallery:NSWindow?,galleryWeb:WKWebView?,showSettings=false
+    var sceneRound:SceneRound?
     var showcase:Showcase?
     var showcaseRequest=0
     var current=0,lastIdle = -1,lastScene = -1
@@ -79,6 +82,9 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     static let coreHeight:CGFloat = 354
     static let floorFraction:CGFloat = 0.045
     let panel = NSPanel(contentRect: NSRect(x:0,y:0,width:238,height:Pet.panelHeight), styleMask:[.borderless,.nonactivatingPanel], backing:.buffered, defer:false)
+    let surface=ActorSurface(frame:.zero)
+    var stage:FullScreenScene?
+    var backdrop:SceneBackdrop = .mist
     var web: WKWebView!
     var hiddenSince=Date(),manualWake=false
     var afterLoad:(()->Void)?
@@ -131,20 +137,134 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     var walkEnabled = true
     var deadline = 0.0
     var lastReaction = -1
+    var profiles=ProfileStore(),editingSlot=1
+    weak var owner:Pet?
+    static let maximumSlots=10
+    var slotCount=3
+    var selectedCompanions:[Int:PetModel]=[:]
+    var companions:[Pet]=[]
+    var slot=1
+    var sceneHome:CGFloat?
+    var walkingHome=false
+    var savesPreferences:Bool { !testing && slot==1 }
+
+    func refreshMenus(){
+        let primary=owner ?? self
+        primary.status?.menu=primary.menu()
+    }
+
+    @objc func addCompanion(_ item:NSMenuItem){
+        guard slot==1,let id=item.representedObject as? String,
+              let model=PetModel(rawValue:id),models.choices.contains(model),
+              let number=(2...Self.maximumSlots).first(where:{n in !companions.contains{$0.slot==n}}) else{return}
+        if number>slotCount{
+            selectedCompanions[number]=model
+            setSlotCount(number)
+        }else{createCompanion(model,slot:number)}
+    }
+
+    func setSlotCount(_ requested:Int){
+        guard slot==1 else{return}
+        let count=min(Self.maximumSlots,max(1,requested)),previous=slotCount
+        guard count != previous else{return}
+        slotCount=count
+        if savesPreferences{UserDefaults.standard.set(count,forKey:"slotCount")}
+        if count<previous{
+            for child in companions where child.slot>count{child.removeCompanion(remember:true)}
+        }else{
+            for number in (previous+1)...count{
+                if let model=selectedCompanions[number]{createCompanion(model,slot:number)}
+            }
+        }
+        refreshMenus();syncSlotPickers()
+    }
+
+    func remember(_ model:PetModel,at number:Int){
+        selectedCompanions[number]=model
+        if savesPreferences{UserDefaults.standard.set(model.rawValue,forKey:"companionModel"+String(number))}
+    }
+
+    func createCompanion(_ model:PetModel,slot number:Int){
+        guard slot==1,number>=2,number<=slotCount,!companions.contains(where:{$0.slot==number}) else{return}
+        let child=Pet()
+        child.slot=number
+        child.editingSlot=number;child.owner=self;child.selectedModel=model;child.walkEnabled=walkEnabled;child.walkClip=walkClip
+        companions.append(child)
+        remember(model,at:number)
+        child.start()
+        if let solo=showcase,solo.kind == .scenes {
+            beginSceneRound(solo.clips,at:solo.position)
+        }
+        if let display=panel.screen ?? NSScreen.main{
+            let w=child.panel.frame.width
+            let occupied=([self]+companions.filter{$0 !== child}).map{$0.panel.frame.midX}
+            let places=(0...32).map{n in display.visibleFrame.minX+(display.visibleFrame.width-w)*CGFloat(n)/32}
+            let x=places.max{a,b in
+                occupied.map{abs(a+w/2-$0)}.min()! < occupied.map{abs(b+w/2-$0)}.min()!
+            } ?? panel.frame.minX
+            child.panel.setFrameOrigin(child.clamp(NSPoint(x:x,y:panel.frame.minY),to:display))
+        }
+        stage?.add(child)
+        refreshMenus();syncSlotPickers()
+    }
+
+    func slotValues()->[String]{
+        let root=owner ?? self
+        return (1...root.slotCount).map{number in number==1 ? root.selectedModel.rawValue : root.selectedCompanions[number]?.rawValue ?? ""}
+    }
+
+    func syncSlotPickers(){
+        let root=owner ?? self
+        for actor in [root]+root.companions where actor.galleryReady{
+            actor.syncProfile()
+            actor.galleryWeb?.callAsyncJavaScript("window.setSlots(values)",arguments:["values":root.slotValues()],in:nil,in:.page){_ in}
+        }
+    }
+
+    @objc func closeCompanion(){removeCompanion(remember:false)}
+
+    func removeCompanion(remember:Bool){
+        guard let primary=owner else{return}
+        timer?.invalidate();timer=nil
+        primary.stage?.remove(self,restore:false)
+        gallery?.close();releaseDesktop();panel.orderOut(nil)
+        primary.companions.removeAll{$0 === self};owner=nil
+        if !remember{
+            primary.selectedCompanions.removeValue(forKey:slot)
+            if primary.savesPreferences{UserDefaults.standard.removeObject(forKey:"companionModel"+String(slot))}
+        }
+        primary.prepareSceneRound()
+        primary.refreshMenus();primary.syncSlotPickers()
+    }
+
     var now: Double { ProcessInfo.processInfo.systemUptime }
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if !testing,let data=UserDefaults.standard.data(forKey:"behavior"),
+        if savesPreferences{
+            let defaults=UserDefaults.standard
+            backdrop=SceneBackdrop(rawValue:defaults.string(forKey:"sceneBackdrop") ?? "") ?? .mist
+            if defaults.object(forKey:"slotCount") != nil{slotCount=min(Self.maximumSlots,max(1,defaults.integer(forKey:"slotCount")))}
+            for number in 2...Self.maximumSlots{
+                if let id=UserDefaults.standard.string(forKey:"companionModel"+String(number)),
+                   let model=PetModel(rawValue:id),models.choices.contains(model){selectedCompanions[number]=model}
+            }
+        }
+        NotificationCenter.default.addObserver(self,selector:#selector(stageDisplaysChanged(_:)),name:NSApplication.didChangeScreenParametersNotification,object:nil)
+        start()
+        for number in selectedCompanions.keys.sorted() where number<=slotCount{
+            if let model=selectedCompanions[number]{createCompanion(model,slot:number)}
+        }
+    }
+    func start(){
+        if savesPreferences,let data=UserDefaults.standard.data(forKey:"behavior"),
            let stored=try? JSONDecoder().decode(Behavior.self,from:data) {settings=stored}
-        if !testing,let id=UserDefaults.standard.string(forKey:"selectedModel"),
-           let choice=PetModel(rawValue:id),models.choices.contains(choice){selectedModel=choice}
+        if savesPreferences,let choice=PetModel.savedChoice("selectedModel"){selectedModel=choice}
         panel.title=selectedModel.name;panel.delegate=self;panel.isOpaque=false;panel.backgroundColor = .clear
         panel.hasShadow=false; panel.level = .floating; panel.hidesOnDeactivate=false
         panel.collectionBehavior=[.canJoinAllSpaces,.fullScreenAuxiliary,.stationary,.ignoresCycle]
         panel.isReleasedWhenClosed=false;panel.isMovableByWindowBackground=false;panel.isMovable=false
         let frame=NSScreen.main?.visibleFrame ?? CGRect(x:0,y:0,width:1024,height:768)
         panel.setFrameOrigin(CGPoint(x:frame.maxX-panel.frame.width-60,y:(NSScreen.main?.frame.minY ?? frame.minY)+1-Pet.floorFraction*panel.frame.height))
-        if !testing {
-            restoreSpot() // Choose the display before applying its size limit.
+        if savesPreferences {
             let saved=UserDefaults.standard.integer(forKey:"sizePercent")
             if saved>0 { resize(to:saved) }
             if let view=UserDefaults.standard.array(forKey:"desktopView") as? [Double],view.count==2,view.allSatisfy({$0.isFinite}){
@@ -154,37 +274,37 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             let savedWalk=UserDefaults.standard.integer(forKey:"preferredGaitV2")
             if let gait=[1:1,12:2,13:3][savedWalk] {walkClip=gait}
         }
-        if !testing {restoreSpot()}
-        let content=NSView(frame:NSRect(origin:.zero,size:panel.frame.size))
+        loadProfile()
+        let content=surface;surface.actor=self;content.frame=NSRect(origin:.zero,size:panel.frame.size)
         let touch=Touch(frame:content.bounds);touch.pet=self;touch.autoresizingMask=[.width,.height]
         content.addSubview(touch);panel.contentView=content;panel.ignoresMouseEvents=true
-        if !testing {
+        if savesPreferences {
             status=NSStatusBar.system.statusItem(withLength:NSStatusItem.squareLength)
             let icon=NSImage(contentsOf:Bundle.main.url(forResource:"ShinoMenu",withExtension:"svg")!)!
             icon.isTemplate=true
             status.button?.image=icon;status.button?.imagePosition = .imageOnly
-            status.button?.setAccessibilityLabel("Shino Open")
+            status.button?.setAccessibilityLabel("Сино")
             status.button?.toolTip=selectedModel.title;status.menu=menu()
         }
         panel.orderFrontRegardless()
         loadDesktop()
-        if !testing && CommandLine.arguments.contains("--studio") { openStudio(false) }
+        if savesPreferences && CommandLine.arguments.contains("--studio") { openStudio(false) }
         let clock=Timer(timeInterval:1/60.0,repeats:true){[weak self] _ in self?.tick()}
         RunLoop.main.add(clock,forMode:.common);timer=clock
-        if testing { DispatchQueue.main.asyncAfter(deadline:.now()+(verifyModels ? 90:40)){ print("Verification timed out"); exit(1) } }
+        if testing && slot==1 { DispatchQueue.main.asyncAfter(deadline:.now()+(verifyModels ? 240:40)){ print("Verification timed out"); exit(1) } }
     }
     func makeView(_ frame:NSRect,preview:[String:Any]?=nil)->WKWebView{
         let cfg=WKWebViewConfiguration()
-        cfg.websiteDataStore = .nonPersistent()
+        cfg.websiteDataStore = Self.dataStore
         cfg.setURLSchemeHandler(Assets(resources:models.resources),forURLScheme:"shino")
-        let config=models.configuration(for:selectedModel,preview:preview)
+        let config=models.configuration(for:selectedModel,preview:preview,slots:slotValues())
         cfg.userContentController.addUserScript(WKUserScript(source:config,injectionTime:.atDocumentStart,forMainFrameOnly:true))
         cfg.userContentController.add(self,name:"pet")
         let v=WKWebView(frame:frame,configuration:cfg);v.navigationDelegate=self
         return v
     }
     func loadDesktop(){
-        guard web==nil,let content=panel.contentView else{return}
+        guard web==nil else{return};let content=surface
         let v=makeView(content.bounds);web=v
         v.setValue(false,forKey:"drawsBackground");v.autoresizingMask=[.width,.height]
         content.addSubview(v,positioned:.below,relativeTo:content.subviews.first)
@@ -202,31 +322,37 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func releaseDesktop(){
         guard let v=web else{return}
         cancelFacing()
+        primary.sceneRound?.members.removeValue(forKey:slot)
         web=nil;ready=false;mask=[]
         v.navigationDelegate=nil;v.configuration.userContentController.removeScriptMessageHandler(forName:"pet")
         v.stopLoading();v.removeFromSuperview()
     }
     func applicationShouldHandleReopen(_ sender:NSApplication,hasVisibleWindows flag:Bool)->Bool { openStudio(false); return true }
-    func webViewWebContentProcessDidTerminate(_ webView:WKWebView) { if webView===web {endRotation();ready=false;moving=false;picked=nil;mask=[];panel.ignoresMouseEvents=true};webView.reload() }
+    func webViewWebContentProcessDidTerminate(_ webView:WKWebView) { if webView===web {primary.sceneRound?.members.removeValue(forKey:slot);endRotation();ready=false;moving=false;picked=nil;mask=[];panel.ignoresMouseEvents=true};webView.reload() }
     func js(_ code:String) { web?.evaluateJavaScript(code,completionHandler:nil) }
     func userContentController(_ userContentController: WKUserContentController,didReceive message: WKScriptMessage) {
         guard let d=message.body as? [String:Any],let kind=d["type"] as? String else {return}
         guard message.webView===web || message.webView===galleryWeb else{return}
-        if kind=="language",message.webView===galleryWeb,let value=d["value"] as? String,["system","ru","en"].contains(value){
-            UserDefaults.standard.set(value,forKey:"interfaceLanguage")
-            changeModel(to:selectedModel,preview:d["preview"] as? [String:Any])
-            return
+        if kind=="slotCount",message.webView===galleryWeb,let count=d["value"] as? Int{
+            primary.setSlotCount(count);return
         }
-        if kind=="model",message.webView===galleryWeb,let id=d["value"] as? String,let choice=PetModel(rawValue:id){
-            selectModel(choice,preview:d["preview"] as? [String:Any]);return
+        if kind=="slot",message.webView===galleryWeb,let number=d["slot"] as? Int,(1...primary.slotCount).contains(number),let id=d["value"] as? String{
+            let root=owner ?? self
+            let actor=number==1 ? root : root.companions.first(where:{$0.slot==number})
+            if id.isEmpty && number>1{actor?.closeCompanion()}
+            else if let model=PetModel(rawValue:id),models.choices.contains(model){
+                if let actor{actor.selectModel(model,preview:actor===self ? d["preview"] as? [String:Any] : nil)}
+                else{root.createCompanion(model,slot:number)}
+            }
+            return
         }
         if kind=="error",selectedModel != .shino,!testing{
             let failed=selectedModel.title
             NSLog("Model %@ could not open: %@",failed,String(describing:d["value"]))
             selectModel(.shino,preview:savedPreview ?? [:])
             if let gallery{
-                let alert=NSAlert();alert.messageText=tr("Не удалось открыть")+" "+failed
-                alert.informativeText=tr("Открыт исходный образ Сино.")
+                let alert=NSAlert();alert.messageText="Не удалось открыть "+failed
+                alert.informativeText="Открыт исходный образ Сино."
                 alert.beginSheetModal(for:gallery)
             }
             return
@@ -234,34 +360,40 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         if kind=="motionError"{
             NSLog("Motion could not load: %@",String(describing:d["value"]))
             if message.webView===web && ready{moving=false;lastReaction = -1;play(0);deadline=now+durations[0]}
-            if message.webView===galleryWeb{galleryWeb?.evaluateJavaScript("el('caption').textContent=tr('Не удалось загрузить движение. Нажми «Повтор».')")}
+            if message.webView===galleryWeb{galleryWeb?.evaluateJavaScript("el('caption').textContent='Не удалось загрузить движение. Нажми «Повтор».'")}
             return
         }
         if message.webView===galleryWeb {
+            if kind=="backdrop",let id=d["value"] as? String,let choice=SceneBackdrop(rawValue:id){primary.applyBackdrop(choice);return}
+            if kind=="openScene",let display=primary.preferredSceneScreen {primary.openFullScreenScene(on:display);return}
             if kind=="ready"{
                 galleryReady=true;galleryWeb?.evaluateJavaScript("pet.enterStudio()");syncStudio()
                 if gallery?.isMiniaturized==true{galleryWeb?.evaluateJavaScript("pet.visibility(false)")}
             }
-            if kind=="size",let value=d["value"] as? Int{setUserSize(value)}
+            if kind=="mode",let value=d["value"] as? Bool{setProfileMode(value);return}
+            if kind=="target",let n=d["value"] as? Int,actors.contains(where:{$0.slot==n}){editingSlot=n;syncProfile();return}
+            let subject=profileTarget
+            if kind=="walk",let value=d["value"] as? Bool{subject.editProfile{$0.walking=value}}
+            if kind=="gait",let value=d["value"] as? Int,(1...3).contains(value){subject.editProfile{$0.gait=value}}
+            if kind=="size",let value=d["value"] as? Int{subject.setUserSize(value)}
             if kind=="prefs",let value=d["value"],JSONSerialization.isValidJSONObject(value),
                let data=try? JSONSerialization.data(withJSONObject:value),var p=try? JSONDecoder().decode(Behavior.self,from:data) {
                 p.low=min(86400,max(5,p.low));p.high=min(86400,max(p.low,p.high));p.amount=min(150,max(0,p.amount))
                 p.visits?.normalize()
-                let previous=settings
-                settings=p
-                if !testing {UserDefaults.standard.set(try? JSONEncoder().encode(p),forKey:"behavior")}
-                applySettings(previous:previous)
+                subject.editProfile{$0.behavior=p}
             }
-            if kind=="visitNow" {showNow()}
-            if kind=="error"{galleryWeb?.evaluateJavaScript("document.getElementById('caption').textContent=tr('Не удалось загрузить модель. Закрой и снова открой примерочную.')");NSLog("Preview error: %@",String(describing:d["value"]))}
+            if kind=="resetAngle"{for actor in primary.profiles.individual ? [subject]:actors {actor.resetView()}}
+            if kind=="login"{primary.changeLogin()}
+            if kind=="visitNow" {for actor in primary.profiles.individual ? [subject]:actors {actor.showNow()}}
+            if kind=="error"{galleryWeb?.evaluateJavaScript("document.getElementById('caption').textContent='Не удалось загрузить модель. Закрой и снова открой примерочную.'");NSLog("Preview error: %@",String(describing:d["value"]))}
             return
         }
         guard message.webView===web else{return}
         if kind=="mask", let data=d["value"] as? String, data.utf8.count==32*52 {receiveMask(data)}
         if kind=="error" {
-            let text=String(describing:d["value"] ?? tr("Ошибка модели"))
+            let text=String(describing:d["value"] ?? "Ошибка модели")
             if testing {print(text);exit(1)}
-            let alert=NSAlert();alert.messageText=tr("Не удалось открыть Сино");alert.informativeText=text;alert.runModal();NSApp.terminate(nil)
+            let alert=NSAlert();alert.messageText="Не удалось открыть Сино";alert.informativeText=text;alert.runModal();NSApp.terminate(nil)
         }
         if kind=="ready",let payload=d["value"] as? [String:[Double]],let rates=payload["rates"],let lengths=payload["durations"],rates.indices.contains(walkClip) {
             let first = !hasLoaded;hasLoaded=true
@@ -269,21 +401,23 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             durations=lengths;ready=true;sendView()
             let resumed=resumeDesktop
             resumeDesktop=nil
-            if let state=resumed,!away {restoreDesktop(state)}else{idle()}
-            if manualWake{manualWake=false;visitOrigin=Date();shownCycle=nil}
-            if resumed == nil{applySettings()}else{js("pet.intensity(\(Double(settings.amount)/100))");updateVisit(at:Date())}
-            let action=afterLoad;afterLoad=nil;action?()
-            if showcase != nil && resumed == nil{startShowcaseClip()}
-            if away {js("pet.paused(true)")}
-            let showBehavior=CommandLine.arguments.contains("--behavior")
-            if first && !testing {
-                if !UserDefaults.standard.bool(forKey:"didMeetShino") {
-                    UserDefaults.standard.set(true,forKey:"didMeetShino")
-                    if !away {perform(clipID("hello"));showWelcome()}
-                }
-                if showBehavior || CommandLine.arguments.contains("--studio"){openStudio(showBehavior)}
+            if primary.sceneRound != nil{
+                afterLoad=nil;manualWake=false
+                js("pet.intensity(\(Double(settings.amount)/100))")
+                showPanel();primary.prepareSceneRound()
+            }else{
+                if let state=resumed,!away {restoreDesktop(state)}else{idle()}
+                if manualWake{manualWake=false;visitOrigin=Date();shownCycle=nil}
+                if resumed == nil{applySettings()}else{js("pet.intensity(\(Double(settings.amount)/100))");updateVisit(at:Date())}
+                let action=afterLoad;afterLoad=nil;action?()
+                if showcase != nil && resumed == nil{startShowcaseClip()}
+                if away {js("pet.paused(true)")}
             }
-            if first && testing {
+            let showBehavior=CommandLine.arguments.contains("--behavior")
+            if first && savesPreferences && (showBehavior || CommandLine.arguments.contains("--studio") || !UserDefaults.standard.bool(forKey:"didIntroduceStudio")){
+                openStudio(showBehavior);UserDefaults.standard.set(true,forKey:"didIntroduceStudio")
+            }
+            if first && testing && slot==1 {
                 DispatchQueue.main.asyncAfter(deadline:.now()+0.35){
                     if self.verifyModels {Task { @MainActor in await self.verifyModelPicker() }}
                     else{self.verify()}
@@ -291,51 +425,66 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             }
         }
     }
-    var welcome:NSPanel?
-    func menu()->NSMenu {
+    func menu(includeStage:Bool=true)->NSMenu {
         let m=NSMenu();m.delegate=self
         for (name,action) in [
             ("Показать сейчас",#selector(showNow)),
             ("Примерочная движений…",#selector(library)),
             ("Поведение…",#selector(behavior)),
             (showcase?.kind == .movements ? "Остановить показ движений" : "Показать все движения подряд",#selector(toggleMovementShowcase)),
-            (showcase?.kind == .scenes ? "Остановить показ сценок" : "Показать все сценки",#selector(toggleSceneShowcase))
+            (primary.sceneRound != nil || showcase?.kind == .scenes ? "Остановить показ сценок" : "Показать все сценки",#selector(toggleSceneShowcase))
         ] {
-            let item=m.addItem(withTitle:tr(name),action:action,keyEquivalent:"");item.target=self
+            let item=m.addItem(withTitle:name,action:action,keyEquivalent:"");item.target=self
         }
+        if includeStage {m.setSubmenu(stageMenu(),for:m.addItem(withTitle:"Сцена во весь экран",action:nil,keyEquivalent:""))}
         m.addItem(.separator())
-        let walk=m.addItem(withTitle:tr("Гулять по экрану"),action:#selector(toggleWalk),keyEquivalent:"");walk.target=self;walk.state=walkEnabled ? .on:.off
+        let walk=m.addItem(withTitle:"Гулять по экрану",action:#selector(toggleWalk),keyEquivalent:"");walk.target=self;walk.state=walkEnabled ? .on:.off
         if models.choices.count>1{
             let list=NSMenu()
             for choice in models.choices{
                 let item=list.addItem(withTitle:choice.title,action:#selector(chooseModel(_:)),keyEquivalent:"")
                 item.representedObject=choice.rawValue;item.target=self;item.state=choice==selectedModel ? .on:.off
             }
-            m.setSubmenu(list,for:m.addItem(withTitle:tr("Персонаж"),action:nil,keyEquivalent:""))
+            m.setSubmenu(list,for:m.addItem(withTitle:"Персонаж",action:nil,keyEquivalent:""))
         }
         let sizeMenu=NSMenu()
         for percent in Set(sizes.filter{$0<=maximumSize}+[sizePercent]).sorted() {
             let item=sizeMenu.addItem(withTitle:"\(percent) %",action:#selector(chooseSize(_:)),keyEquivalent:"")
             item.tag=percent; item.target=self; item.state=percent==sizePercent ? .on:.off
         }
-        m.setSubmenu(sizeMenu,for:m.addItem(withTitle:tr("Размер"),action:nil,keyEquivalent:""))
-        let reset=m.addItem(withTitle:tr("Сбросить ракурс"),action:#selector(resetView),keyEquivalent:"");reset.target=self
+        m.setSubmenu(sizeMenu,for:m.addItem(withTitle:"Размер",action:nil,keyEquivalent:""))
+        let reset=m.addItem(withTitle:"Сбросить ракурс",action:#selector(resetView),keyEquivalent:"");reset.target=self
         let gaits=NSMenu()
         for (id,title) in [(3,"Мягкая прогулка"),(1,"Обычный шаг"),(2,"Сдержанный шаг")] {
-            let item=gaits.addItem(withTitle:tr(title),action:#selector(chooseGait(_:)),keyEquivalent:"")
+            let item=gaits.addItem(withTitle:title,action:#selector(chooseGait(_:)),keyEquivalent:"")
             item.tag=id;item.target=self;item.state=id==walkClip ? .on:.off
         }
-        m.setSubmenu(gaits,for:m.addItem(withTitle:tr("Походка"),action:nil,keyEquivalent:""))
+        m.setSubmenu(gaits,for:m.addItem(withTitle:"Походка",action:nil,keyEquivalent:""))
         let scenes=NSMenu()
         for i in catalog.indices where catalog[i].role=="scene" {
-            let item=scenes.addItem(withTitle:tr(catalog[i].label),action:#selector(choose(_:)),keyEquivalent:"")
+            let item=scenes.addItem(withTitle:catalog[i].label,action:#selector(choose(_:)),keyEquivalent:"")
             item.tag=catalogStart+i;item.target=self
         }
-        m.setSubmenu(scenes,for:m.addItem(withTitle:tr("Сценки"),action:nil,keyEquivalent:""))
+        m.setSubmenu(scenes,for:m.addItem(withTitle:"Сценки",action:nil,keyEquivalent:""))
         m.addItem(.separator())
-        let login=m.addItem(withTitle:tr("Запускать при входе в macOS"),action:#selector(toggleLogin),keyEquivalent:"")
+        if slot>1 {
+            let close=m.addItem(withTitle:"Убрать этого персонажа",action:#selector(closeCompanion),keyEquivalent:"")
+            close.target=self
+            return m
+        }
+        let add=NSMenu()
+        for choice in models.choices{
+            let item=add.addItem(withTitle:choice.title,action:#selector(addCompanion(_:)),keyEquivalent:"")
+            item.target=self;item.representedObject=choice.rawValue
+        }
+        if companions.count<Self.maximumSlots-1 {m.setSubmenu(add,for:m.addItem(withTitle:"Добавить персонажа",action:nil,keyEquivalent:""))}
+        for child in companions.sorted(by:{$0.slot<$1.slot}){
+            m.setSubmenu(child.menu(includeStage:false),for:m.addItem(withTitle:"№\(child.slot) · "+child.selectedModel.title,action:nil,keyEquivalent:""))
+        }
+        m.addItem(.separator())
+        let login=m.addItem(withTitle:"Запускать при входе в macOS",action:#selector(toggleLogin),keyEquivalent:"")
         login.target=self;refreshLogin(login)
-        m.addItem(.separator());let quit=m.addItem(withTitle:tr("Закрыть программу"),action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q");quit.target=NSApp
+        m.addItem(.separator());let quit=m.addItem(withTitle:"Закрыть программу",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q");quit.target=NSApp
         return m
     }
     func menuNeedsUpdate(_ menu:NSMenu){
@@ -345,7 +494,12 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         let state=SMAppService.mainApp.status
         item.state=state == .enabled ? .on : state == .requiresApproval ? .mixed : .off
     }
-    @objc func toggleLogin(_ item:NSMenuItem){
+    @objc func toggleLogin(_ item:NSMenuItem){changeLogin();refreshLogin(item)}
+    func syncLogin(){
+        let state=SMAppService.mainApp.status
+        galleryWeb?.evaluateJavaScript("window.setLogin?.(\(state == .enabled),\(state == .requiresApproval))")
+    }
+    func changeLogin(){
         let service=SMAppService.mainApp
         do{
             if service.status == .enabled || service.status == .requiresApproval{try service.unregister()}
@@ -354,7 +508,8 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 if service.status == .requiresApproval{SMAppService.openSystemSettingsLoginItems()}
             }
         }catch{NSAlert(error:error).runModal()}
-        refreshLogin(item)
+        for actor in actors where actor.galleryReady{actor.syncLogin()}
+        refreshMenus()
     }
     func play(_ index:Int,_ dir:Int=0) {
         guard ready else{return}
@@ -397,7 +552,7 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         finishShowcase()
         if !ready{manualWake=true;loadDesktop();return}
         if settings.visits?.enabled==true {restartVisit()}
-        panel.orderFrontRegardless()
+        showActor()
     }
     func restartVisit(){
         let date=Date()
@@ -405,7 +560,7 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         updateVisit(at:date)
     }
     func updateVisit(at date:Date){
-        guard showcase==nil else{return}
+        guard showcase==nil,primary.sceneRound==nil else{return}
         guard let visits=settings.visits,visits.enabled else{
             if visitOrigin != nil {
                 if !ready{loadDesktop();return}
@@ -424,7 +579,9 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         if remaining<=0 {
             if !away {
                 hiddenSince=date;endRotation();cancelFacing();away=true;picked=nil;dragged=false;moving=false;lastReaction = -1
-                panel.ignoresMouseEvents=true;panel.orderOut(nil)
+                panel.ignoresMouseEvents=true;hideActor()
+                if let home=sceneHome{moveActor(to:NSPoint(x:home,y:actorFrame.minY))}
+                sceneHome=nil;walkingHome=false
                 js("pet.gaze(0,0);pet.paused(true)")
             }
             shownCycle=nil
@@ -452,10 +609,9 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func showPanel(){
         away=false;lastTick=now;timer?.fireDate=Date()
         js("pet.paused(false)")
-        panel.orderFrontRegardless()
+        showActor()
     }
-    @objc func toggleMovementShowcase(){toggleShowcase(.movements)}
-    @objc func toggleSceneShowcase(){toggleShowcase(.scenes)}
+    @objc func toggleMovementShowcase(){primary.stopSceneRound();toggleShowcase(.movements)}
     func toggleShowcase(_ kind:Showcase.Kind){
         if showcase?.kind==kind{finishShowcase();return}
         let clips:[Int]
@@ -469,12 +625,13 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         showcaseRequest+=1
         showcase=Showcase(kind:kind,clips:clips)
         afterLoad=nil;manualWake=false;deadline = .infinity
-        status?.menu=menu()
+        refreshMenus()
         if ready{startShowcaseClip()}else{loadDesktop()}
     }
     func startShowcaseClip(){
+        walkingHome=false
         guard let show=showcase,ready,let view=web else{return}
-        if away{showPanel()}else{panel.orderFrontRegardless()}
+        if away{showPanel()}else{showActor()}
         moving=false;lastReaction = -1;deadline = .infinity
         let position=show.position,clip=show.clips[position]
         showcaseRequest+=1;let request=showcaseRequest
@@ -482,14 +639,14 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             guard self.web===view,self.ready,self.showcaseRequest==request else{return}
             guard (try? result.get()) as? Bool==true else{self.finishShowcase();return}
             if clip==self.startClip{
-                let display=(self.panel.screen ?? NSScreen.main)!
+                guard let display=self.actorScreen else{return}
                 let screen=display.frame
-                self.direction=self.panel.frame.midX<screen.midX ? 1:-1
-                let edge=self.clamp(NSPoint(x:self.direction>0 ? screen.maxX+self.panel.frame.width:screen.minX-self.panel.frame.width,y:self.panel.frame.minY),to:display)
+                self.direction=self.actorFrame.midX<screen.midX ? 1:-1
+                let edge=self.clamp(NSPoint(x:self.direction>0 ? screen.maxX+self.actorFrame.width:screen.minX-self.actorFrame.width,y:self.actorFrame.minY),to:display)
                 let distance=[3,1].reduce(0.0){$0+2*self.gaitRates[$1]*self.durations[$1]}
                 let start=self.catalog[self.startClip-self.catalogStart].travel?.max() ?? 0
                 let turn=self.catalog[self.turnClip-self.catalogStart].travel?.max() ?? 0
-                self.roomScale=min(1,abs(edge.x-self.panel.frame.minX)/(self.panel.frame.height*(distance+(start+turn)*self.travelScale)))
+                self.roomScale=min(1,abs(edge.x-self.actorFrame.minX)/(self.actorFrame.height*(distance+(start+turn)*self.travelScale)))
                 self.strideRemainder=0
             }
             if position>0 && show.clips[position-1]==self.turnClip{self.direction = -self.direction}
@@ -503,8 +660,9 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         }
     }
     func finishShowcase(){
+        if primary.sceneRound != nil{primary.stopSceneRound();return}
         guard showcase != nil else{return}
-        showcase=nil;showcaseRequest+=1;status?.menu=menu()
+        showcase=nil;showcaseRequest+=1;refreshMenus()
         if ready{idle();scheduleScene()}
         shownCycle=nil;updateVisit(at:Date())
     }
@@ -543,13 +701,15 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     }
     func changeModel(to choice:PetModel,preview:[String:Any]?){
         endRotation();picked=nil;dragged=false;lastCursor=NSPoint(x:-99999,y:-99999)
-        if ready{resumeDesktop=captureDesktop()}
+        if ready && primary.sceneRound==nil{resumeDesktop=captureDesktop()}
         showcaseRequest+=1
         releaseDesktop();durations=[];gaitRates=[];strideRemainder=0
         panel.ignoresMouseEvents=true
         selectedModel=choice
-        if !testing{UserDefaults.standard.set(choice.rawValue,forKey:"selectedModel")}
-        panel.title=choice.name;status?.button?.toolTip=choice.title;status?.menu=menu()
+        if savesPreferences{UserDefaults.standard.set(choice.rawValue,forKey:"selectedModel")}
+        owner?.remember(choice,at:slot)
+        syncSlotPickers()
+        panel.title=choice.name;status?.button?.toolTip=choice.title;refreshMenus()
         if let window=gallery{
             savedPreview=preview;galleryReady=false
             if let options=preview?["settings"] as? Bool{showSettings=options}
@@ -561,9 +721,9 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             let next=makeView(bounds,preview:preview);galleryWeb=next;window.contentView=next
             window.title=studioTitle;loadGallery(next)
         }
-        if !away || manualWake || showcase != nil{loadDesktop()}else{updateVisit(at:Date())}
+        if !away || manualWake || showcase != nil || primary.sceneRound != nil{loadDesktop()}else{updateVisit(at:Date())}
     }
-    var studioTitle:String {selectedModel.title+" — "+tr("примерочная")}
+    var studioTitle:String {selectedModel.title+" — примерочная"}
     func loadGallery(_ view:WKWebView){
         view.load(URLRequest(url:URL(string:"shino://local/studio.html")!))
     }
@@ -584,11 +744,16 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             else{loadGallery(view)}
             if away{updateVisit(at:Date())}
         }else{syncStudio()}
+        if let gallery,let stage=primary.stage,gallery.screen?.sceneID==stage.screen.sceneID {gallery.level=NSWindow.Level(rawValue:stage.window.level.rawValue+1)}
         NSApp.activate(ignoringOtherApps:true);gallery?.makeKeyAndOrderFront(nil)
     }
     func syncStudio(){
+        syncBackdrop()
+        syncLogin()
+        syncSlotPickers()
         guard let data=try? JSONEncoder().encode(settings),let json=String(data:data,encoding:.utf8) else{return}
         galleryWeb?.evaluateJavaScript("window.setupStudio?.(\(json),\(showSettings),\(sizePercent),\(maximumSize))")
+        syncProfile()
     }
     func windowDidMiniaturize(_ note:Notification){
         if note.object as? NSWindow === gallery { galleryWeb?.evaluateJavaScript("window.pet?.visibility(false)") }
@@ -611,6 +776,7 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         return weights.randomElement() ?? 0
     }
     func idle(){
+        walkingHome=false
         moving=false;lastReaction = -1
         let id=plannedIdle.flatMap{allowed("idle").contains($0) ? $0:nil} ?? pickIdle()
         plannedIdle=nil;lastIdle=id;play(id)
@@ -638,55 +804,57 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard ready else{return}
         moving=false;lastScene=clip;lastReaction=clip;roomScale=1
         let row=catalog.indices.contains(clip-catalogStart) ? catalog[clip-catalogStart]:nil
+        walkingHome=false
         if let path=row?.travel {
-            let screen=(panel.screen ?? NSScreen.main)!.frame
-            let roomLeft=panel.frame.minX-screen.minX,roomRight=screen.maxX-panel.frame.maxX
+            if !walkEnabled && row?.role=="scene" && sceneHome==nil {sceneHome=actorFrame.minX}
+            guard let screen=actorScreen?.frame else{return}
+            let roomLeft=actorFrame.minX-screen.minX,roomRight=screen.maxX-actorFrame.maxX
             direction=roomRight>=roomLeft ? 1:-1
-            roomScale=min(1,max(0,max(roomLeft,roomRight))/(panel.frame.height*travelScale*max(0.01,path.map{abs($0)}.max() ?? 0.01)))
+            roomScale=min(1,max(0,max(roomLeft,roomRight))/(actorFrame.height*travelScale*max(0.01,path.map{abs($0)}.max() ?? 0.01)))
             play(clip,Int(direction))
         }else{play(clip)}
         deadline=now+durations[clip]
         let next=pickIdle();plannedIdle=next;js("pet.prefetch(\(next))")
     }
     @objc func toggleWalk(){
-        finishShowcase()
-        walkEnabled.toggle();if !testing {UserDefaults.standard.set(walkEnabled,forKey:"walkEnabled")}
-        if walkEnabled{requestWalk()}else if ready && !away{idle()}else{afterLoad=nil}
-        status?.menu=menu()
+        editProfile{$0.walking.toggle()}
     }
     var maximumSize:Int{
-        guard let visible=(panel.screen ?? NSScreen.main)?.visibleFrame else{return 200}
-        return max(15,min(400,Int(100*min(visible.height/Pet.panelHeight,visible.width/238))))
+        guard let display=actorScreen else{return 200}
+        return Self.maximumSize(in:onStage ? display.frame : display.visibleFrame)
+    }
+    static func maximumSize(in area:NSRect)->Int{
+        max(15,min(400,Int(100*min(area.height/panelHeight,area.width/238))))
+    }
+    static func dimensions(at percent:Int)->NSSize{
+        let scale=CGFloat(percent)/100
+        return NSSize(width:round(238*scale),height:round(panelHeight*scale))
     }
     func resize(to requested:Int) {
-        guard let screen=panel.screen ?? NSScreen.main else{return}
-        let percent=min(maximumSize,max(15,requested)),old=panel.frame
-        let scale=CGFloat(percent)/100
-        let size=NSSize(width:round(238*scale),height:round(Pet.panelHeight*scale))
+        guard let screen=actorScreen else{return}
+        let percent=min(maximumSize,max(15,requested)),old=actorFrame
+        let size=Self.dimensions(at:percent)
         let onFloor=abs(old.minY+Pet.floorFraction*old.height-screen.frame.minY-1)<2
         let y=onFloor ? screen.frame.minY+1-Pet.floorFraction*size.height : old.minY
         let origin=NSPoint(x:old.midX-size.width/2,y:y)
-        panel.setFrame(NSRect(origin:clamp(origin,to:screen,size:size),size:size),display:true)
+        setActorFrame(NSRect(origin:clamp(origin,to:screen,size:size),size:size))
+        if let home=sceneHome{sceneHome=clamp(NSPoint(x:home+(old.width-size.width)/2,y:origin.y),to:screen,size:size).x}
         sizePercent=percent
     }
     func setUserSize(_ value:Int) {
-        resize(to:value)
-        if !testing {UserDefaults.standard.set(sizePercent,forKey:"sizePercent")}
-        status?.menu=menu()
-        if value != sizePercent {syncSize()}
+        editProfile{$0.size=min(maximumSize,max(15,value))}
     }
-    func syncSize(){
-        galleryWeb?.evaluateJavaScript("window.setDesktopSize?.(\(sizePercent),\(maximumSize))")
-    }
+    func syncSize(){if galleryReady{syncProfile()}}
     func windowDidChangeScreen(_ notification:Notification){
-        guard let window=notification.object as? NSWindow,window===panel else{return}
+        guard let window=notification.object as? NSWindow,window===panel,!onStage else{return}
         if sizePercent>maximumSize{resize(to:maximumSize)}
-        syncSize();status?.menu=menu()
+        syncSize();refreshMenus()
     }
     @objc func chooseSize(_ item:NSMenuItem) {
         setUserSize(item.tag);syncSize()
     }
     func requestWalk(){
+        sceneHome=nil;walkingHome=false
         finishShowcase()
         if !ready{
             afterLoad={ [weak self] in if let self{self.beginWalk(at:self.now)} }
@@ -696,11 +864,8 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         beginWalk(at:now)
     }
     @objc func chooseGait(_ item:NSMenuItem) {
-        walkClip=item.tag;walkEnabled=true;lastReaction = -1
-        if !testing {UserDefaults.standard.set(true,forKey:"walkEnabled")}
-        requestWalk()
-        if !testing {UserDefaults.standard.set([1:1,2:12,3:13][walkClip],forKey:"preferredGaitV2")}
-        status?.menu=menu()
+        editProfile{$0.gait=item.tag;$0.walking=true}
+        if !moving && facingSince==nil{requestWalk()}
     }
     @objc func choose(_ item:NSMenuItem){
         finishShowcase()
@@ -709,8 +874,8 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         if away{restartVisit()};perform(tag)
     }
     func clamp(_ pos:NSPoint,to screen:NSScreen,size:NSSize?=nil)->NSPoint {
-        let windowSize=size ?? panel.frame.size
-        let horizontal=screen.frame, vertical=screen.visibleFrame
+        let windowSize=size ?? actorFrame.size
+        let horizontal=screen.frame, vertical=onStage ? screen.frame : screen.visibleFrame
         let left=horizontal.minX+2-silhouette.minX*windowSize.width
         let right=horizontal.maxX-2-silhouette.maxX*windowSize.width
         let bottom=screen.frame.minY+1-Pet.floorFraction*windowSize.height
@@ -718,11 +883,12 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         return NSPoint(x:max(left,min(right,pos.x)),y:max(bottom,min(top,pos.y)))
     }
     func sendView(){if ready{js("pet.desktopView(\(viewAngles.x),\(viewAngles.y))")}}
-    func saveView(){if !testing{UserDefaults.standard.set([Double(viewAngles.x),Double(viewAngles.y)],forKey:"desktopView")}}
+    func saveView(){if savesPreferences{UserDefaults.standard.set([Double(viewAngles.x),Double(viewAngles.y)],forKey:"desktopView")}}
     @objc func resetView(){viewAngles = .zero;saveView();sendView()}
     func endRotation(){
         guard let rotationDrag else{return}
         self.rotationDrag=nil
+        if primary.sceneRound != nil{saveView();return}
         let held=now-rotationDrag.start
         phaseStart+=held;deadline+=held;walkUntil+=held;nextScene+=held
         saveView()
@@ -735,15 +901,17 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard ready && !away else{return}
         cancelFacing()
         if rotating{
-            rotationDrag=(mouse,viewAngles,now);js("pet.paused(true)");return
+            rotationDrag=(mouse,viewAngles,now)
+            if primary.sceneRound==nil{js("pet.paused(true)")}
+            return
         }
-        finishShowcase();guard !away else{return}
-        picked=mouse;startOrigin=panel.frame.origin;lastMove=now;previousPointer=mouse;pointerVelocity = .zero;dragged=false
+        if primary.sceneRound==nil{finishShowcase()};guard !away else{return}
+        picked=mouse;startOrigin=actorFrame.origin;lastMove=now;previousPointer=mouse;pointerVelocity = .zero;dragged=false
         glanceUntil=0;js("pet.gaze(0,0)");moving=false
     }
     func moveGrab(_ mouse:NSPoint){
         if let rotationDrag{
-            let rate=2*CGFloat.pi/max(160,panel.frame.width*1.45)
+            let rate=2*CGFloat.pi/max(160,actorFrame.width*1.45)
             let yaw=rotationDrag.angles.x-(mouse.x-rotationDrag.mouse.x)*rate
             let pitch=rotationDrag.angles.y-(mouse.y-rotationDrag.mouse.y)*rate*0.8
             viewAngles=NSPoint(x:atan2(sin(yaw),cos(yaw)),y:max(-maximumPitch,min(maximumPitch,pitch)))
@@ -753,12 +921,12 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard let picked else{return}
         let dx=mouse.x-picked.x,dy=mouse.y-picked.y
         guard dragged || hypot(dx,dy)>3 else{return}
-        if !dragged {play(0)}
+        if !dragged {sceneHome=nil;walkingHome=false;if primary.sceneRound==nil{play(0)}}
         dragged=true
-        let screen=NSScreen.screens.first{$0.frame.contains(mouse)} ?? panel.screen ?? NSScreen.main
+        let screen=onStage ? actorScreen : (NSScreen.screens.first{$0.frame.contains(mouse)} ?? actorScreen)
         guard let screen else{return}
         let target=clamp(NSPoint(x:startOrigin.x+dx,y:startOrigin.y+dy),to:screen)
-        panel.setFrameOrigin(target)
+        moveActor(to:target)
         let time=now,elapsed=max(1.0/240,time-lastMove)
         let weight=1-exp(-elapsed/0.035)
         pointerVelocity.x+=weight*((mouse.x-previousPointer.x)/elapsed-pointerVelocity.x)
@@ -769,10 +937,10 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func release(){
         if rotationDrag != nil{endRotation();return}
         guard picked != nil else{return};picked=nil
-        if dragged {if !testing{saveSpot()};idle()}else {nextPerformance(manual:true)}
+        if primary.sceneRound==nil{if dragged {idle()}else {nextPerformance(manual:true)}}
     }
     func hit(_ mouse:NSPoint)->Bool {
-        let rect=panel.frame
+        let rect=actorFrame
         guard rect.contains(mouse),mask.count==32*52 else{return false}
         let x=min(31,max(0,Int((mouse.x-rect.minX)/rect.width*32)))
         let y=min(51,max(0,Int((rect.maxY-mouse.y)/rect.height*52)))
@@ -784,15 +952,15 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func beginWalk(at time:Double){
         js("pet.prefetch(\(walkClip));pet.prefetch(\(stopClip));pet.prefetch(\(turnClip))")
         moving=true;lastReaction = -1;strideRemainder=0;walkStart=time;roomScale=1
-        let f=(panel.screen ?? NSScreen.main)!.frame
-        if panel.frame.midX < f.minX+panel.frame.width {direction=1}
-        if panel.frame.midX > f.maxX-panel.frame.width {direction = -1}
+        guard let f=actorScreen?.frame else{return}
+        if actorFrame.midX < f.minX+actorFrame.width {direction=1}
+        if actorFrame.midX > f.maxX-actorFrame.width {direction = -1}
         play(startClip,Int(direction));deadline=time+durations[startClip];walkUntil=deadline+Double.random(in:5.5...9)
     }
     func cursor(_ mouse:NSPoint,_ time:Double){
         guard settings.gaze,time>=nextGaze else{return};nextGaze=time+0.09
-        let center=NSPoint(x:panel.frame.midX,y:panel.frame.minY+panel.frame.height*0.78)
-        let dx=mouse.x-center.x,dy=mouse.y-center.y,range=panel.frame.height*0.88
+        let center=NSPoint(x:actorFrame.midX,y:actorFrame.minY+actorFrame.height*0.78)
+        let dx=mouse.x-center.x,dy=mouse.y-center.y,range=actorFrame.height*0.88
         if hypot(dx,dy)<range && hypot(mouse.x-lastCursor.x,mouse.y-lastCursor.y)>3 && time>=nextGlance{
             glanceUntil=time+1.5;nextGlance=time+3
         }
@@ -802,35 +970,57 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         }else if gazeSent{js("pet.gaze(0,0)");gazeSent=false}
     }
     func tick(){
+        if sceneRound != nil{advanceSceneRound(at:now)}
         guard hasLoaded else{return}
         updateVisit(at:Date())
         if away || !ready || durations.isEmpty{return}
         let time=now,elapsed=min(0.10,time-lastTick);lastTick=time
         if picked != nil || rotationDrag != nil{return}
-        if facingSince==nil && showcase==nil && time>=nextScene && lastReaction<0{
+        if sceneHome==nil && facingSince==nil && showcase==nil && primary.sceneRound==nil && time>=nextScene && lastReaction<0{
             if allowed("scene").isEmpty{scheduleScene()}
             else{nextPerformance(manual:false)}
         }
         let mouse=NSEvent.mouseLocation
-        let rect=panel.frame
+        let rect=actorFrame
         let nearPointer=rect.insetBy(dx:-36,dy:-36).contains(mouse)
         let bounds=CGRect(x:rect.minX+silhouette.minX*rect.width,y:rect.minY+silhouette.minY*rect.height,
                           width:silhouette.width*rect.width,height:silhouette.height*rect.height)
-        let nearEdge=panel.screen.map{!$0.visibleFrame.insetBy(dx:16,dy:16).contains(bounds)} ?? false
+        let nearEdge=actorScreen.map{!$0.visibleFrame.insetBy(dx:16,dy:16).contains(bounds)} ?? false
         let watch=nearPointer || nearEdge
         if watchingMask != watch{watchingMask=watch;js("pet.watchMask(\(watch))")}
         panel.ignoresMouseEvents=testing || !hit(mouse);cursor(mouse,time)
-        if facingSince != nil{return}
+        if primary.sceneRound != nil || facingSince != nil{return}
+        if walkingHome,let target=sceneHome{
+            let remaining=target-actorFrame.minX
+            let step=max(0,gaitRates[current])*actorFrame.height*elapsed
+            if abs(remaining)<=step+0.5 || step==0 {
+                moveActor(to:NSPoint(x:target,y:actorFrame.minY))
+                walkingHome=false;sceneHome=nil;moving=false;lastReaction = -1;strideRemainder=0
+                if showcase==nil{idle();scheduleScene();return}
+                deadline=time
+            }else{
+                translateHome(towards:target,step:step)
+                return
+            }
+        }
         if moving || lastReaction>=0 {
             if catalog.indices.contains(current-catalogStart),let _=catalog[current-catalogStart].travel{
                 let row=catalog[current-catalogStart],phase=(time-phaseStart)/durations[current]
                 let distance=row.distance(at:phase)*travelScale
-                translate(direction*(distance-rootDistance)*roomScale*panel.frame.height)
+                translate(direction*(distance-rootDistance)*roomScale*actorFrame.height)
                 rootDistance=distance
             }else if moving{
                 let rate=showcase==nil ? gaitRates[walkClip] : gaitRates[current]*roomScale
-                translate(direction*panel.frame.height*rate*elapsed)
+                translate(direction*actorFrame.height*rate*elapsed)
             }
+        }
+        if time>=deadline,let home=sceneHome{
+            if abs(home-actorFrame.minX)>0.5 {
+                walkingHome=true;direction=home>actorFrame.minX ? 1:-1
+                moving=true;strideRemainder=0;play(walkClip,Int(direction));deadline = .infinity
+                return
+            }
+            sceneHome=nil
         }
         if let show=showcase{
             if time>=deadline{
@@ -839,9 +1029,9 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             }
             return
         }
-        if moving && current==walkClip,let screen=panel.screen{
-            let limit=clamp(NSPoint(x:direction>0 ? screen.frame.maxX+panel.frame.width : screen.frame.minX-panel.frame.width,y:panel.frame.minY),to:screen)
-            let clearance=abs(limit.x-panel.frame.minX)/panel.frame.height
+        if moving && current==walkClip,let screen=actorScreen{
+            let limit=clamp(NSPoint(x:direction>0 ? screen.frame.maxX+actorFrame.width : screen.frame.minX-actorFrame.width,y:actorFrame.minY),to:screen)
+            let clearance=abs(limit.x-actorFrame.minX)/actorFrame.height
             let turn=(catalog[turnClip-catalogStart].travel?.max() ?? 0.3)*travelScale
             if clearance<turn+0.08{play(turnClip,Int(direction));deadline=time+durations[turnClip];return}
         }
@@ -856,11 +1046,19 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         else if settings.visits?.enabled != true && walkEnabled && (lastIdle==0 || Bool.random()){beginWalk(at:time)}
         else{idle()}
     }
+    func translateHome(towards target:CGFloat,step:CGFloat){
+        let origin=actorFrame.origin
+        let sign:CGFloat=target>origin.x ? 1:-1
+        let distance=min(max(0,step+sign*strideRemainder),abs(target-origin.x))
+        let x=origin.x+sign*distance
+        moveActor(to:NSPoint(x:x,y:origin.y))
+        strideRemainder=x-actorFrame.minX
+    }
     func translate(_ step:CGFloat){
-        guard step.isFinite,let screen=panel.screen ?? NSScreen.main else{return}
-        let pos=panel.frame.origin
+        guard step.isFinite,let screen=actorScreen else{return}
+        let pos=actorFrame.origin
         let target=clamp(NSPoint(x:pos.x+step+strideRemainder,y:pos.y),to:screen)
-        panel.setFrameOrigin(NSPoint(x:target.x,y:pos.y));strideRemainder=target.x-panel.frame.minX
+        moveActor(to:NSPoint(x:target.x,y:pos.y));strideRemainder=target.x-actorFrame.minX
     }
     func verifySizes(_ sizes:[Int]){
         guard let percent=sizes.first else{verifyPointer();return}
@@ -1016,7 +1214,7 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 guard self.allowed("idle").contains(self.current) else{print("Manual arrival failed");exit(1)}
                 self.updateVisit(at:self.visitOrigin!.addingTimeInterval(2.1))
                 let menu=self.menu(),previousStart=self.visitOrigin
-                guard self.away,menu.items.first?.title==tr("Показать сейчас") else{print("Missing show command");exit(1)}
+                guard self.away,menu.items.first?.title=="Показать сейчас" else{print("Missing show command");exit(1)}
                 menu.performActionForItem(at:0)
                 guard !self.away,self.panel.isVisible,self.visitOrigin != previousStart,self.shownCycle==0,
                       self.settings.visits==Visits(enabled:true,period:4,duration:2) else{print("Show from menu failed");exit(1)}
@@ -1052,11 +1250,11 @@ final class Pet: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     }
     func verifyShowcaseMenu(){
         func select(_ title:String){
-            let m=menu(),i=m.indexOfItem(withTitle:tr(title))
+            let m=menu(),i=m.indexOfItem(withTitle:title)
             guard i>=0 else{print("Missing menu command",title);exit(1)}
             m.performActionForItem(at:i)
         }
-        let scenes=menu().item(withTitle:tr("Сценки"))?.submenu?.items.map(\.tag)
+        let scenes=menu().item(withTitle:"Сценки")?.submenu?.items.map(\.tag)
         select("Показать все движения подряд")
         guard showcase?.clips.first==startClip else{print("Movement showcase failed");exit(1)}
         select("Показать все сценки")

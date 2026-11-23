@@ -65,7 +65,7 @@ class GarmentFit:
         k=dist.argmin(1);n=np.arange(len(k));v=v[n,k];w=w[n,k]
         return f[k],np.column_stack([1-v-w,v,w])
 
-    def tailor(self,points,influences,material):
+    def tailor(self,points,influences,material,allowance=None):
         # The skirt and ribbon have their own cloth rig. The boot shaft, sleeves
         # and bodice need the same bend, twist and bust weights as the body below.
         selected=np.flatnonzero((points[:,1]>1.044) | (points[:,1]<.225))
@@ -88,7 +88,8 @@ class GarmentFit:
                     x,y,z=p[j];shoe=y<.225
                     fade=1. if shoe else min(1.,max(0.,(y-1.044)/.059))
                     # Add only ease. The drafted flare and gathers keep their cut.
-                    if shoe:ease=.0035
+                    if allowance is not None:ease=allowance
+                    elif shoe:ease=.0035
                     elif is_knit and abs(x)>.508:ease=.0018+.0102*max(0.,(.532-abs(x))/.024)
                     else:ease=.021 if is_knit and abs(x)<.158 else .012
                     points[i]+=normals[j]*max(0.,ease-gap[j])*fade

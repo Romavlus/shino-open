@@ -23,12 +23,11 @@ async function startPet() {
     const head=vrm.humanoid.getRawBoneNode('head');
     const height=head.getWorldPosition(new Vector()).y;
     const hips=vrm.humanoid.getRawBoneNode('hips'),pattern=hips.userData.wrapDress;
-    const wrapDress=pattern?.body?fitHangingDress(vrm,hips,pattern,Vector):null;
-    const frameHeight=height;
+    const wrapDress=pattern ? fitHangingDress(vrm,hips,pattern,Vector):null;
     const cameraHeight=height*.58;
     const coreFraction=Number(params.get('core')) || 1;
-    const travelScale=(wrapDress?.gaitScale??1)*coreFraction;
-    camera.position.set(0,cameraHeight, frameHeight*2.31);
+    const travelScale=coreFraction;
+    camera.position.set(0,cameraHeight, height*2.31);
     camera.lookAt(0,cameraHeight,0);
     let portrait=false;
     let controls;
@@ -39,7 +38,7 @@ async function startPet() {
         maskDirty=true;
         if(studio)return;
         desktopYaw=yaw;
-        const distance=frameHeight*2.31,radius=distance*Math.cos(pitch);
+        const distance=height*2.31,radius=distance*Math.cos(pitch);
         camera.position.set(radius*Math.sin(yaw),cameraHeight+distance*Math.sin(pitch),radius*Math.cos(yaw));
         camera.lookAt(center);render();
     }
@@ -47,7 +46,7 @@ async function startPet() {
         if(!controls)return;
         if(portrait){head.getWorldPosition(center);center.y+=.01}
         else center.set(0,cameraHeight,0);
-        offset.subVectors(camera.position,controls.target).setLength(portrait?.91:frameHeight*2.65);
+        offset.subVectors(camera.position,controls.target).setLength(portrait?.91:height*2.65);
         controls.target.copy(center);
         camera.position.copy(center).add(offset);
         controls.update();
@@ -96,7 +95,6 @@ async function startPet() {
         projection.elements[9]=baseProjectionY;
         const motion=record();
         // Shino's planted takes keep a supporting foot even in a curtsy or a turn.
-        // Her hop lifts both feet off the floor.
         const airborne=motion?.key==='hop';
         if(!airborne){
             let bottom=Infinity;
@@ -140,10 +138,11 @@ async function startPet() {
         if(!pending.has(i))pending.set(i,motions.loadAsync(files[i]).then(asset=>attach(i,asset)).finally(()=>pending.delete(i)));
         return pending.get(i);
     }
+    let sceneCue=null;
     function trim(requested){
         for(const i of recent){
             if(recent.size<=7)break;
-            if(i===requested || i===0 || i===active || actions[i].isRunning() || transition?.layers.some(l=>l.action===actions[i]))continue;
+            if(i===requested || i===sceneCue?.index || i===0 || i===active || actions[i].isRunning() || transition?.layers.some(l=>l.action===actions[i]))continue;
             mixer.uncacheClip(actions[i].getClip());delete actions[i];recent.delete(i);
         }
     }
@@ -175,9 +174,7 @@ async function startPet() {
     const restingClips=[0,...catalog.filter(row=>row.role==='idle').map(row=>files.indexOf(row.file))];
     const hairs=Array.from(vrm.springBoneManager.joints)
         .filter(j=>j.bone.name.toLowerCase().includes('hairjoint'))
-        .map(joint=>{
-            return {joint,gravity:joint.settings.gravityDir.clone(),power:joint.settings.gravityPower};
-        });
+        .map(joint=>({joint,gravity:joint.settings.gravityDir.clone(),power:joint.settings.gravityPower}));
     let selection=0, pivot=null;
     function travelHeading(index,dir,seconds=0){
         if(!dir)return 0;
@@ -268,6 +265,10 @@ async function startPet() {
         transition={layers,time:0,duration:isWalk(index) || isWalk(active) ? .40 : .26};
         active=index;
     }
+    function cueScene(index,epoch,duration){
+        cancelPivot();++selection;
+        sceneCue={index,start:performance.now()+(epoch-Date.now()),duration,playing:false};
+    }
     let lastDrag=-Infinity;
     function drag(vx,vy){
         // Points per second on the desktop: quiet at low speeds, bounded on a flick.
@@ -302,7 +303,7 @@ async function startPet() {
         delta.setFromUnitVectors(from,to).slerp(identity,1-strength);
         parent.quaternion.premultiply(delta);parent.updateWorldMatrix(true,true);
     }
-    const clearArms=fitArmContacts(vrm,Vector,limbs,steer,wrapDress?.sleevePadding);
+    const clearArms=fitArmContacts(vrm,Vector,limbs,steer,wrapDress?.sleevePadding,wrapDress?.sleeveFoldLimit);
     const pendulum=new Vector(),velocity=new Vector();
     function updateAvatar(dt,acting){
         // Less damping than the head lets the feet settle a little later.
@@ -330,11 +331,9 @@ async function startPet() {
             leg.thigh.bone.rotateZ(-sway);leg.thigh.bone.rotateX(tuck*.6+pendulum.y*.034);
             leg.knee.bone.rotateX(-tuck);leg.ankle.bone.rotateX(tuck*.28);
         }
-        {
-            const weight=i=>actions[i]?.isRunning()?actions[i].getEffectiveWeight():0;
-            const restingWeight=restingClips.reduce((sum,i)=>sum+weight(i),0);
-            clearArms(weight(chillyIndex),dt,restingWeight,acting,weight(1)+weight(2)+weight(3));
-        }
+        const weight=i=>actions[i]?.isRunning()?actions[i].getEffectiveWeight():0;
+        const restingWeight=restingClips.reduce((sum,i)=>sum+weight(i),0);
+        clearArms(weight(chillyIndex),dt,restingWeight,acting,weight(1)+weight(2)+weight(3));
         vrm.update(dt);
         if(wrapDress)wrapDress.update(dt,lagX,lagY,Math.atan2(camera.position.x,camera.position.z));
         for(const j of overlay)j.bone.quaternion.copy(j.pose);
@@ -350,6 +349,11 @@ async function startPet() {
         const dt=Math.min(.07,(now-lastFrame)/1000);
         lastFrame=now;
         if(paused)return;
+        const cue=sceneCue;
+        const elapsed=cue ? (now-cue.start)/1000 : 0;
+        if(cue && !cue.playing && elapsed>=0){
+            cue.playing=true;play(cue.index,0,true);
+        }
         const meta=record();
         if(pivot){
             pivot.time+=dt;
@@ -376,8 +380,17 @@ async function startPet() {
             joint.settings.gravityPower=magnitude;
             joint.settings.gravityDir.copy(magnitude>1e-5?gravity.multiplyScalar(1/magnitude):rest);
         }
-        const motionDt=pivot && sceneDirection ? 0:dt;
-        blend(motionDt);mixer.update(motionDt);faceClock+=dt;paint(dt);
+        let motionDt=pivot && sceneDirection ? 0:dt;
+        if(cue?.playing){
+            const action=actions[cue.index],length=action.getClip().duration;
+            const target=Math.min(.999999,Math.max(0,elapsed/cue.duration))*length;
+            motionDt=Math.min(motionDt,target);
+            // The mixer still blends and runs the rig and springs once per frame.
+            // Use the common phase even after a late or dropped display frame.
+            action.time=target-motionDt;
+            faceClock=Math.min(cue.duration,elapsed);
+        }else{faceClock+=dt}
+        blend(motionDt);mixer.update(motionDt);paint(dt);
         if(!studio && (maskDirty || (trackMask && now-lastMask>205))){
             maskDirty=false;
             lastMask=now;pixels.clearRect(0,0,32,52);pixels.drawImage(renderer.domElement,0,0,32,52);
@@ -475,14 +488,14 @@ async function startPet() {
         }
     }
     window.pet={play,drag,sample,previewState,restoreCamera,
-        desktopView,prepare,faceTravel,cancelPivot,
+        desktopView,prepare,faceTravel,cancelPivot,cueScene,endSceneRound(){sceneCue=null},
         watchMask(value){if(value && !trackMask)maskDirty=true;trackMask=value},
         prefetch(i){prepare(i).then(()=>trim(i)).catch(()=>{});},
 
         enterStudio(){
             if(studio)return;
             studio=true;document.documentElement.classList.remove('desktop');
-            camera.position.set(0,cameraHeight,frameHeight*2.65);enableOrbit();resize();
+            camera.position.set(0,cameraHeight,height*2.65);enableOrbit();resize();
             focusX=focusY=0;window.studioReady();
         },
         paused:v=>{paused=v;syncFrames()},visibility:v=>{visible=v;syncFrames()},portrait:v=>{portrait=v;frameSubject();paint(0)},
@@ -493,7 +506,7 @@ async function startPet() {
             if(paused && visible && !document.hidden)paint(0);
         },
         gaze:(x,y)=>{focusX=x;focusY=y},
-        durations:files.map((file,i)=>clipSeconds[file]),
+        durations:files.map(file=>clipSeconds[file]),
         check:(fit=false)=>({model:petModel.id,file:petModel.file,dress:!!wrapDress,motions:actions.length,hairs:hairs.length,rendered:renderer.info.render.frame,active,...(fit?inspectFit():{}),
         power:Math.max(...hairs.map(h=>h.joint.settings.gravityPower)),triangles:renderer.info.render.triangles,
         knee:vrm.humanoid.getNormalizedBoneNode('leftLowerLeg').rotation.x,
